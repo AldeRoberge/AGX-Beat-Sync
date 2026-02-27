@@ -48,6 +48,10 @@ public class BeatSyncGame : Game
 
     private readonly AudioLoadCoordinator _audioLoad = new();
 
+    private bool _gameViewResizeDragging;
+    private int _gameViewResizeStartY;
+    private int _gameViewResizeStartHeight;
+
     public BeatSyncGame()
     {
         _graphics = new GraphicsDeviceManager(this);
@@ -426,8 +430,24 @@ public class BeatSyncGame : Game
             _graphics.ApplyChanges();
         }
 
-        _layout.GameViewExpanded = _gameViewPanel.Expanded;
+        if (_gameViewResizeDragging)
+        {
+            int minH = PanelLayout.MinGameViewHeight;
+            int maxH = Math.Max(minH, _graphics.PreferredBackBufferHeight - PanelLayout.TransportHeight - PanelLayout.MinTimelineHeight);
+            int newH = _gameViewResizeStartHeight + (Input.MousePosition.Y - _gameViewResizeStartY);
+            _layout.GameViewHeightPx = Math.Clamp(newH, minH, maxH);
+            if (Input.MouseLeftReleased)
+                _gameViewResizeDragging = false;
+        }
+
         _layout.Update(_graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+
+        if (!_gameViewResizeDragging && Input.MouseLeftPressed && _layout.DividerGrip.Contains(Input.MousePosition))
+        {
+            _gameViewResizeDragging = true;
+            _gameViewResizeStartY = Input.MousePosition.Y;
+            _gameViewResizeStartHeight = _layout.GameViewHeightPx;
+        }
         _transportBar.Bounds = _layout.TransportBar;
         _transportBar.Project = Project;
         _transportBar.Transport = Transport;
