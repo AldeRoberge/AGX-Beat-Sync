@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net9.0-windows</TargetFramework>
+        <RootNamespace>AGX_Beat_Sync</RootNamespace>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <UseWPF>false</UseWPF>
+        <UseWindowsForms>true</UseWindowsForms>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.3" />
+        <PackageReference Include="NAudio" Version="2.2.1" />
+        <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+    </ItemGroup>
+
+    <!-- MonoGame expects embedded Icon.bmp for window/taskbar icon; generate from Icon.png -->
+    <Target Name="ConvertIconToBmp" BeforeTargets="BeforeBuild" Inputs="$(ProjectDir)Icon.png" Outputs="$(ProjectDir)Icon.bmp" Condition="Exists('$(ProjectDir)Icon.png')">
+        <Exec Command="powershell -NoProfile -Command &quot;Add-Type -AssemblyName System.Drawing; [System.Drawing.Image]::FromFile('$(ProjectDir)Icon.png').Save('$(ProjectDir)Icon.bmp', [System.Drawing.Imaging.ImageFormat]::Bmp)&quot;" />
+    </Target>
+    <Target Name="IncludeIconBmp" AfterTargets="ConvertIconToBmp" BeforeTargets="BeforeBuild" Condition="Exists('$(ProjectDir)Icon.bmp')">
+        <ItemGroup>
+            <EmbeddedResource Include="$(ProjectDir)Icon.bmp">
+                <LogicalName>Icon.bmp</LogicalName>
+            </EmbeddedResource>
+        </ItemGroup>
+    </Target>
+
+</Project>
