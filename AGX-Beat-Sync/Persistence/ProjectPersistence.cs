@@ -94,7 +94,6 @@ public static class ProjectPersistence
                 BPM = project.BPM,
                 TimeSignatureNumerator = project.TimeSignatureNumerator,
                 TimeSignatureDenominator = project.TimeSignatureDenominator,
-                BeatOffsetSeconds = project.BeatOffsetSeconds,
                 InTime = project.InTime,
                 OutTime = project.OutTime,
                 CurrentTime = transport.CurrentTime,
@@ -220,7 +219,6 @@ public static class ProjectPersistence
         project.BPM = saved.BPM;
         project.TimeSignatureNumerator = saved.TimeSignatureNumerator;
         project.TimeSignatureDenominator = saved.TimeSignatureDenominator;
-        project.BeatOffsetSeconds = saved.BeatOffsetSeconds;
         project.InTime = saved.InTime;
         project.OutTime = saved.OutTime;
         project.AutomationTracks.Clear();
@@ -231,7 +229,7 @@ public static class ProjectPersistence
             project.EventTracks.Add(t);
 
         transport.BPM = saved.BPM;
-        transport.BeatOffsetSeconds = saved.BeatOffsetSeconds;
+        transport.BeatOffsetSeconds = saved.InTime ?? saved.BeatOffsetSeconds;
         transport.CurrentTime = Math.Max(0, saved.CurrentTime);
         if (project.InTime is { } inT && project.OutTime is { } outT && outT > inT)
             transport.CurrentTime = Math.Clamp(transport.CurrentTime, inT, outT);

@@ -11,6 +11,11 @@ public enum InspectorNumberField
 {
     None,
     Speed,
+    Lifetime,
+    Count,
+    CircleRadius, CircleSpread,
+    ConeSpreadAngle,
+    LineLength,
     PositionX, PositionY, PositionZ,
     RotationX, RotationY, RotationZ,
 }
@@ -19,8 +24,11 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 {
     private bool _positionExpanded = true;
     private bool _rotationExpanded = true;
+    private bool _advancedExpanded;
     private bool _positionDropdownOpen;
     private bool _rotationDropdownOpen;
+    private bool _modeDropdownOpen;
+    private bool _patternDropdownOpen;
 
     // Number field editing
     private InspectorNumberField _focusedField = InspectorNumberField.None;
@@ -31,16 +39,32 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private Rectangle _positionModeRect;
     private Rectangle _rotationFoldoutRect;
     private Rectangle _rotationModeRect;
+    private Rectangle _advancedFoldoutRect;
     private Rectangle _positionDropdownRect;
     private Rectangle[] _positionModeOptionRects = Array.Empty<Rectangle>();
     private Rectangle _rotationDropdownRect;
     private Rectangle[] _rotationModeOptionRects = Array.Empty<Rectangle>();
+    private Rectangle _modeValueRect;
+    private Rectangle _modeDropdownRect;
+    private Rectangle[] _modeOptionRects = Array.Empty<Rectangle>();
+    private Rectangle _patternValueRect;
+    private Rectangle _patternDropdownRect;
+    private Rectangle[] _patternOptionRects = Array.Empty<Rectangle>();
     private Rectangle _speedValueRect;
+    private Rectangle _lifetimeValueRect;
+    private Rectangle _countValueRect;
+    private Rectangle _circleRadiusValueRect;
+    private Rectangle _circleSpreadValueRect;
+    private Rectangle _coneSpreadAngleValueRect;
+    private Rectangle _lineLengthValueRect;
+    private Rectangle _fullCircleRect;
     private Rectangle[] _positionValueRects = Array.Empty<Rectangle>();
     private Rectangle[] _rotationValueRects = Array.Empty<Rectangle>();
 
     private static readonly string[] PositionModeOptions = Enum.GetNames<PositionMode>();
     private static readonly string[] RotationModeOptions = Enum.GetNames<RotationMode>();
+    private static readonly string[] SpawnModeOptions = Enum.GetNames<SpawnMode>();
+    private static readonly string[] SpawnPatternOptions = Enum.GetNames<SpawnPattern>();
 
     private static char? GetNumericKeyChar(Keys key)
     {
@@ -78,6 +102,97 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
 
+        // Mode: Single | Multiple
+        string modeText = t.SpawnMode.ToString();
+        _modeValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Mode", modeText, ref cursorY);
+        y = cursorY;
+        if (_modeDropdownOpen)
+        {
+            int selected = (int)t.SpawnMode;
+            (_modeDropdownRect, _modeOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnModeOptions, selected, ref cursorY, input.MousePosition);
+            y = cursorY;
+        }
+        else
+            _modeOptionRects = Array.Empty<Rectangle>();
+
+        if (t.SpawnMode != SpawnMode.Multiple)
+        {
+            _countValueRect = default;
+            _circleRadiusValueRect = default;
+            _circleSpreadValueRect = default;
+            _coneSpreadAngleValueRect = default;
+            _lineLengthValueRect = default;
+            _fullCircleRect = default;
+            _patternValueRect = default;
+        }
+
+        // Pattern (only when Multiple)
+        if (t.SpawnMode == SpawnMode.Multiple)
+        {
+            string patternText = t.Pattern.ToString();
+            _patternValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Pattern", patternText, ref cursorY);
+            y = cursorY;
+            if (_patternDropdownOpen)
+            {
+                int selected = (int)t.Pattern;
+                (_patternDropdownRect, _patternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnPatternOptions, selected, ref cursorY, input.MousePosition);
+                y = cursorY;
+            }
+            else
+                _patternOptionRects = Array.Empty<Rectangle>();
+
+            // Count (1-10)
+            int count = Math.Clamp(t.Count, 1, 10);
+            string countText = _focusedField == InspectorNumberField.Count ? _editText : count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            bool countCursor = _focusedField == InspectorNumberField.Count && (Environment.TickCount64 / 500) % 2 == 0;
+            _countValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Count", countText, ref cursorY, showCaret: countCursor);
+            y = cursorY;
+
+            // Pattern-specific params
+            if (t.Pattern == SpawnPattern.Circle)
+            {
+                _coneSpreadAngleValueRect = default;
+                _lineLengthValueRect = default;
+                string radiusText = _focusedField == InspectorNumberField.CircleRadius ? _editText : t.CircleRadius.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _circleRadiusValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Radius", radiusText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleRadius && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+                string fullCircleText = t.CircleFullCircle ? "On" : "Off";
+                _fullCircleRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Full Circle", fullCircleText, ref cursorY);
+                y = cursorY;
+                if (!t.CircleFullCircle)
+                {
+                    string spreadText = _focusedField == InspectorNumberField.CircleSpread ? _editText : t.CircleSpread.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _circleSpreadValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread", spreadText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleSpread && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _circleSpreadValueRect = default;
+            }
+            else if (t.Pattern == SpawnPattern.Cone)
+            {
+                _circleRadiusValueRect = default;
+                _circleSpreadValueRect = default;
+                _fullCircleRect = default;
+                _lineLengthValueRect = default;
+                string coneText = _focusedField == InspectorNumberField.ConeSpreadAngle ? _editText : t.ConeSpreadAngle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _coneSpreadAngleValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread Angle", coneText, ref cursorY, showCaret: _focusedField == InspectorNumberField.ConeSpreadAngle && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+            }
+            else if (t.Pattern == SpawnPattern.Line)
+            {
+                _circleRadiusValueRect = default;
+                _circleSpreadValueRect = default;
+                _fullCircleRect = default;
+                _coneSpreadAngleValueRect = default;
+                string lineText = _focusedField == InspectorNumberField.LineLength ? _editText : t.LineLength.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _lineLengthValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Length", lineText, ref cursorY, showCaret: _focusedField == InspectorNumberField.LineLength && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+            }
+        }
+
+        InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
+        y = cursorY;
+
         // Position section
         _positionFoldoutRect = InspectorDrawer.DrawFoldout(sb, pixel, sb.GraphicsDevice, x, y, w, "Position", _positionExpanded, ref cursorY);
         y = cursorY;
@@ -100,6 +215,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             else
                 _positionModeOptionRects = Array.Empty<Rectangle>();
 
+            bool cursorVisible = (Environment.TickCount64 / 500) % 2 == 0;
             if (!_positionDropdownOpen && t.PositionMode == PositionMode.Absolute)
             {
                 var v = t.PositionAbsolute;
@@ -107,7 +223,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 InspectorDrawer.DrawVector3Rows(sb, pixel, sb.GraphicsDevice, x + InspectorDrawer.Indent, y, w - InspectorDrawer.Indent, v, ref cursorY,
                     _focusedField == InspectorNumberField.PositionX ? _editText : null,
                     _focusedField == InspectorNumberField.PositionY ? _editText : null,
-                    _focusedField == InspectorNumberField.PositionZ ? _editText : null);
+                    _focusedField == InspectorNumberField.PositionZ ? _editText : null,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionX,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionY,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionZ);
             }
             else if (!_positionDropdownOpen && t.PositionMode == PositionMode.Relative)
             {
@@ -116,7 +235,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 InspectorDrawer.DrawVector3Rows(sb, pixel, sb.GraphicsDevice, x + InspectorDrawer.Indent, y, w - InspectorDrawer.Indent, v, ref cursorY,
                     _focusedField == InspectorNumberField.PositionX ? _editText : null,
                     _focusedField == InspectorNumberField.PositionY ? _editText : null,
-                    _focusedField == InspectorNumberField.PositionZ ? _editText : null);
+                    _focusedField == InspectorNumberField.PositionZ ? _editText : null,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionX,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionY,
+                    cursorVisible && _focusedField == InspectorNumberField.PositionZ);
             }
             else
                 _positionValueRects = Array.Empty<Rectangle>();
@@ -148,6 +270,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             else
                 _rotationModeOptionRects = Array.Empty<Rectangle>();
 
+            bool rotationCursorVisible = (Environment.TickCount64 / 500) % 2 == 0;
             if (!_rotationDropdownOpen && t.RotationMode == RotationMode.Absolute)
             {
                 var v = t.RotationEuler;
@@ -155,7 +278,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 InspectorDrawer.DrawVector3Rows(sb, pixel, sb.GraphicsDevice, x + InspectorDrawer.Indent, y, w - InspectorDrawer.Indent, v, ref cursorY,
                     _focusedField == InspectorNumberField.RotationX ? _editText : null,
                     _focusedField == InspectorNumberField.RotationY ? _editText : null,
-                    _focusedField == InspectorNumberField.RotationZ ? _editText : null);
+                    _focusedField == InspectorNumberField.RotationZ ? _editText : null,
+                    rotationCursorVisible && _focusedField == InspectorNumberField.RotationX,
+                    rotationCursorVisible && _focusedField == InspectorNumberField.RotationY,
+                    rotationCursorVisible && _focusedField == InspectorNumberField.RotationZ);
             }
             else
                 _rotationValueRects = Array.Empty<Rectangle>();
@@ -165,9 +291,19 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
 
-        // Speed
+        // Speed, Lifetime (universal)
         string speedText = _focusedField == InspectorNumberField.Speed ? _editText : t.Speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        _speedValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, ref cursorY);
+        bool speedCursorVisible = _focusedField == InspectorNumberField.Speed && (Environment.TickCount64 / 500) % 2 == 0;
+        _speedValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, ref cursorY, showCaret: speedCursorVisible);
+        y = cursorY;
+        string lifetimeText = _focusedField == InspectorNumberField.Lifetime ? _editText : t.Lifetime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        bool lifetimeCursorVisible = _focusedField == InspectorNumberField.Lifetime && (Environment.TickCount64 / 500) % 2 == 0;
+        _lifetimeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Lifetime", lifetimeText, ref cursorY, showCaret: lifetimeCursorVisible);
+
+        y = cursorY;
+        InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
+        y = cursorY;
+        _advancedFoldoutRect = InspectorDrawer.DrawFoldout(sb, pixel, sb.GraphicsDevice, x, y, w, "Advanced", _advancedExpanded, ref cursorY);
     }
 
     private static void GetVector3ValueRects(int x, int y, int w, out Rectangle[] rects)
@@ -297,6 +433,75 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             return;
         }
 
+        if (_advancedFoldoutRect.Contains(pt))
+        {
+            _advancedExpanded = !_advancedExpanded;
+            return;
+        }
+
+        // Mode dropdown
+        if (_modeDropdownOpen)
+        {
+            if (_modeDropdownRect.Contains(pt))
+            {
+                for (int i = 0; i < _modeOptionRects.Length; i++)
+                {
+                    if (_modeOptionRects[i].Contains(pt))
+                    {
+                        t.SpawnMode = (SpawnMode)i;
+                        _modeDropdownOpen = false;
+                        return;
+                    }
+                }
+            }
+            else
+                _modeDropdownOpen = false;
+            return;
+        }
+
+        if (_patternDropdownOpen && t.SpawnMode == SpawnMode.Multiple)
+        {
+            if (_patternDropdownRect.Contains(pt))
+            {
+                for (int i = 0; i < _patternOptionRects.Length; i++)
+                {
+                    if (_patternOptionRects[i].Contains(pt))
+                    {
+                        t.Pattern = (SpawnPattern)i;
+                        _patternDropdownOpen = false;
+                        return;
+                    }
+                }
+            }
+            else
+                _patternDropdownOpen = false;
+            return;
+        }
+
+        if (t.SpawnMode == SpawnMode.Multiple && t.Pattern == SpawnPattern.Circle && _fullCircleRect != default && _fullCircleRect.Contains(pt))
+        {
+            t.CircleFullCircle = !t.CircleFullCircle;
+            return;
+        }
+
+        if (!_modeDropdownOpen && _modeValueRect.Contains(pt))
+        {
+            _modeDropdownOpen = true;
+            _positionDropdownOpen = false;
+            _rotationDropdownOpen = false;
+            _patternDropdownOpen = false;
+            return;
+        }
+
+        if (t.SpawnMode == SpawnMode.Multiple && !_patternDropdownOpen && _patternValueRect != default && _patternValueRect.Contains(pt))
+        {
+            _patternDropdownOpen = true;
+            _positionDropdownOpen = false;
+            _rotationDropdownOpen = false;
+            _modeDropdownOpen = false;
+            return;
+        }
+
         // When dropdown is open, only allow selecting an option or clicking outside to close — never cycle.
         if (_positionDropdownOpen)
         {
@@ -356,6 +561,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private bool IsPointInAnyNumberField(Point pt)
     {
         if (_speedValueRect.Contains(pt)) return true;
+        if (_lifetimeValueRect.Contains(pt)) return true;
+        if (_countValueRect.Contains(pt) && _countValueRect != default) return true;
+        if (_circleRadiusValueRect.Contains(pt) && _circleRadiusValueRect != default) return true;
+        if (_circleSpreadValueRect.Contains(pt) && _circleSpreadValueRect != default) return true;
+        if (_coneSpreadAngleValueRect.Contains(pt) && _coneSpreadAngleValueRect != default) return true;
+        if (_lineLengthValueRect.Contains(pt) && _lineLengthValueRect != default) return true;
         foreach (var r in _positionValueRects) if (r.Contains(pt)) return true;
         foreach (var r in _rotationValueRects) if (r.Contains(pt)) return true;
         return false;
@@ -364,6 +575,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private InspectorNumberField GetNumberFieldAt(Point pt)
     {
         if (_speedValueRect.Contains(pt)) return InspectorNumberField.Speed;
+        if (_lifetimeValueRect.Contains(pt)) return InspectorNumberField.Lifetime;
+        if (_countValueRect != default && _countValueRect.Contains(pt)) return InspectorNumberField.Count;
+        if (_circleRadiusValueRect != default && _circleRadiusValueRect.Contains(pt)) return InspectorNumberField.CircleRadius;
+        if (_circleSpreadValueRect != default && _circleSpreadValueRect.Contains(pt)) return InspectorNumberField.CircleSpread;
+        if (_coneSpreadAngleValueRect != default && _coneSpreadAngleValueRect.Contains(pt)) return InspectorNumberField.ConeSpreadAngle;
+        if (_lineLengthValueRect != default && _lineLengthValueRect.Contains(pt)) return InspectorNumberField.LineLength;
         if (_positionValueRects.Length >= 3)
         {
             if (_positionValueRects[0].Contains(pt)) return InspectorNumberField.PositionX;
@@ -385,6 +602,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         return field switch
         {
             InspectorNumberField.Speed => t.Speed.ToString("0.##", inv),
+            InspectorNumberField.Lifetime => t.Lifetime.ToString("0.##", inv),
+            InspectorNumberField.Count => Math.Clamp(t.Count, 1, 10).ToString(inv),
+            InspectorNumberField.CircleRadius => t.CircleRadius.ToString("0.##", inv),
+            InspectorNumberField.CircleSpread => t.CircleSpread.ToString("0.##", inv),
+            InspectorNumberField.ConeSpreadAngle => t.ConeSpreadAngle.ToString("0.##", inv),
+            InspectorNumberField.LineLength => t.LineLength.ToString("0.##", inv),
             InspectorNumberField.PositionX => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.X : t.PositionRelative.X).ToString("0.##", inv),
             InspectorNumberField.PositionY => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.Y : t.PositionRelative.Y).ToString("0.##", inv),
             InspectorNumberField.PositionZ => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.Z : t.PositionRelative.Z).ToString("0.##", inv),
@@ -404,6 +627,24 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         {
             case InspectorNumberField.Speed:
                 t.Speed = Math.Max(0.001f, value);
+                break;
+            case InspectorNumberField.Lifetime:
+                t.Lifetime = Math.Max(0.001f, value);
+                break;
+            case InspectorNumberField.Count:
+                t.Count = (int)Math.Clamp(Math.Round(value), 1, 10);
+                break;
+            case InspectorNumberField.CircleRadius:
+                t.CircleRadius = Math.Max(0f, value);
+                break;
+            case InspectorNumberField.CircleSpread:
+                t.CircleSpread = Math.Clamp(value, 1f, 360f);
+                break;
+            case InspectorNumberField.ConeSpreadAngle:
+                t.ConeSpreadAngle = Math.Clamp(value, 0.1f, 360f);
+                break;
+            case InspectorNumberField.LineLength:
+                t.LineLength = Math.Max(0.001f, value);
                 break;
             case InspectorNumberField.PositionX:
                 if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(value, t.PositionAbsolute.Y, t.PositionAbsolute.Z);

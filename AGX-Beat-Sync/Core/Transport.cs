@@ -9,7 +9,7 @@ public class Transport
     public double CurrentTime { get; set; }
     public bool IsPlaying { get; set; }
     public double BPM { get; set; } = 120.0;
-    /// <summary>Time in seconds where beat 0 of the grid sits in the song. Used for grid drawing and snap-to-beat.</summary>
+    /// <summary>Time in seconds where beat 0 of the grid sits (set from project In point). Used for grid drawing and snap-to-beat.</summary>
     public double BeatOffsetSeconds { get; set; }
 
     public double SecondsPerBeat => 60.0 / BPM;

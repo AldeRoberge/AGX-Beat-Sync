@@ -225,7 +225,7 @@ public static class InspectorDrawer
     }
 
     /// <summary>Draw a float row: label + value text. Returns the value field bounds for hit-test / edit.</summary>
-    public static Rectangle DrawFloatRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY)
+    public static Rectangle DrawFloatRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showCaret = false)
     {
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
         DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
@@ -234,12 +234,14 @@ public static class InspectorDrawer
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
         DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
+        if (showCaret)
+            DrawCaret(sb, pixel, device, valueRect, valueText, TextColor);
         cursorY = y + RowHeight;
         return valueRect;
     }
 
     /// <summary>Draw a string row: label + value text (e.g. for FMOD path). Returns the value field bounds for hit-test / edit.</summary>
-    public static Rectangle DrawStringRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY)
+    public static Rectangle DrawStringRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showCaret = false)
     {
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
         DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
@@ -247,21 +249,38 @@ public static class InspectorDrawer
         var valueRect = new Rectangle(x + w - valueW - Padding, y + 2, valueW, RowHeight - 4);
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
-        string displayText = string.IsNullOrEmpty(valueText) ? "..." : (valueText.Length > 24 ? valueText[..24] + "…" : valueText);
+        string displayText = showCaret && string.IsNullOrEmpty(valueText)
+            ? ""
+            : (string.IsNullOrEmpty(valueText) ? "..." : (valueText.Length > 24 ? valueText[..24] + "…" : valueText));
         DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, displayText, pixel);
+        if (showCaret)
+            DrawCaret(sb, pixel, device, valueRect, displayText, TextColor);
         cursorY = y + RowHeight;
         return valueRect;
     }
 
-    /// <summary>Draw three float fields for Vector3 (X, Y, Z). Each on its own row with small label. Advances cursorY by 3*RowHeight. Optional override strings for editing.</summary>
-    public static void DrawVector3Rows(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, Vector3 v, ref int cursorY, string? overrideX = null, string? overrideY = null, string? overrideZ = null)
+    private static void DrawCaret(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, Rectangle valueRect, string text, Color color)
     {
-        DrawVector3Row(sb, pixel, device, x, y, w, "X", v.X, ref cursorY, overrideX);
-        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Y", v.Y, ref cursorY, overrideY);
-        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Z", v.Z, ref cursorY, overrideZ);
+        int caretX = valueRect.X + 4;
+        if (!string.IsNullOrEmpty(text))
+        {
+            var tex = GetLabelTexture(device, text);
+            if (tex != null)
+                caretX += tex.Width;
+        }
+        int h = Math.Max(2, valueRect.Height - 2);
+        sb.Draw(pixel, new Rectangle(caretX, valueRect.Y + 2, 1, h), color);
     }
 
-    private static void DrawVector3Row(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string axis, float value, ref int cursorY, string? valueOverride = null)
+    /// <summary>Draw three float fields for Vector3 (X, Y, Z). Each on its own row with small label. Advances cursorY by 3*RowHeight. Optional override strings and caret flags for editing.</summary>
+    public static void DrawVector3Rows(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, Vector3 v, ref int cursorY, string? overrideX = null, string? overrideY = null, string? overrideZ = null, bool showCaretX = false, bool showCaretY = false, bool showCaretZ = false)
+    {
+        DrawVector3Row(sb, pixel, device, x, y, w, "X", v.X, ref cursorY, overrideX, showCaretX);
+        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Y", v.Y, ref cursorY, overrideY, showCaretY);
+        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Z", v.Z, ref cursorY, overrideZ, showCaretZ);
+    }
+
+    private static void DrawVector3Row(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string axis, float value, ref int cursorY, string? valueOverride = null, bool showCaret = false)
     {
         string valueText = valueOverride ?? value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
@@ -271,6 +290,8 @@ public static class InspectorDrawer
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
         DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
+        if (showCaret)
+            DrawCaret(sb, pixel, device, valueRect, valueText, TextColor);
         cursorY = y + RowHeight;
     }
 }

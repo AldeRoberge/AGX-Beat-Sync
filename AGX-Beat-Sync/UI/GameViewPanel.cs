@@ -13,6 +13,8 @@ public class SpawnedEntity
     public Vector3 Position;
     public Vector3 Velocity;
     public float SpawnTime;
+    /// <summary>Lifetime in seconds before removal.</summary>
+    public float Lifetime { get; set; } = 5f;
 }
 
 public class GameViewPanel : PanelBase
@@ -29,18 +31,54 @@ public class GameViewPanel : PanelBase
     private readonly GameViewOrbitCamera _camera = new();
 
     /// <summary>Spawn an entity at the given world position with velocity (direction * speed). Called when a Spawn Entity event fires.</summary>
-    public void SpawnEntity(Vector3 position, Vector3 rotationEulerRadians, float speed)
+    public void SpawnEntity(Vector3 position, Vector3 rotationEulerRadians, float speed, float lifetime = 5f)
     {
         var rot = Matrix.CreateRotationX(rotationEulerRadians.X) * Matrix.CreateRotationY(rotationEulerRadians.Y) * Matrix.CreateRotationZ(rotationEulerRadians.Z);
         var forward = Vector3.Transform(-Vector3.UnitZ, rot);
         if (forward.LengthSquared() > 0.0001f)
             forward.Normalize();
+        SpawnEntityWithDirection(position, forward, speed, lifetime);
+    }
+
+    /// <summary>Spawn an entity with a world-space direction (normalized or not). Used for pattern bursts.</summary>
+    public void SpawnEntityWithDirection(Vector3 position, Vector3 direction, float speed, float lifetime = 5f)
+    {
+        var d = direction;
+        if (d.LengthSquared() < 1e-8f)
+            d = -Vector3.UnitZ;
+        else
+            d.Normalize();
         _spawnedEntities.Add(new SpawnedEntity
         {
             Position = position,
-            Velocity = forward * speed,
-            SpawnTime = (float)(Transport?.CurrentTime ?? 0)
+            Velocity = d * speed,
+            SpawnTime = (float)(Transport?.CurrentTime ?? 0),
+            Lifetime = lifetime
         });
+    }
+
+    /// <summary>Spawn an entity that moves from position toward a target world position (e.g. player).</summary>
+    public void SpawnEntityTowards(Vector3 position, Vector3 targetWorldPosition, float speed, float lifetime = 5f)
+    {
+        var toTarget = targetWorldPosition - position;
+        if (toTarget.LengthSquared() < 1e-8f)
+            toTarget = -Vector3.UnitZ;
+        else
+            toTarget.Normalize();
+        _spawnedEntities.Add(new SpawnedEntity
+        {
+            Position = position,
+            Velocity = toTarget * speed,
+            SpawnTime = (float)(Transport?.CurrentTime ?? 0),
+            Lifetime = lifetime
+        });
+    }
+
+    /// <summary>Current player world position (for Towards mode).</summary>
+    public Vector3 GetPlayerPosition()
+    {
+        var (target, _, _, _) = GetCameraState();
+        return target;
     }
 
     public override string? GetHoverText(Point mouse)
@@ -281,8 +319,17 @@ public class GameViewPanel : PanelBase
             _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
         }
 
-        foreach (var e in _spawnedEntities)
+        float currentTime = (float)(Transport?.CurrentTime ?? 0);
+        for (int i = _spawnedEntities.Count - 1; i >= 0; i--)
+        {
+            var e = _spawnedEntities[i];
+            if (currentTime - e.SpawnTime >= e.Lifetime)
+            {
+                _spawnedEntities.RemoveAt(i);
+                continue;
+            }
             e.Position += e.Velocity * dt;
+        }
     }
 
     public override void Draw(SpriteBatch spriteBatch)

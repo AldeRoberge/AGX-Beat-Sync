@@ -75,6 +75,8 @@ public class TimelinePanel : PanelBase
     private const int MinNoteWidthForResize = 24;
     private const double MinNoteDurationSeconds = 0.01;
     private const int InOutEdgeHandleWidth = 6;
+    /// <summary>Duration (seconds) for the next note drawn. Updated when user clicks a note so the next drawn note matches that size.</summary>
+    private double _nextNoteDurationSeconds = EventTrackConstants.DefaultEventDurationSeconds;
 
     public Project? Project { get; set; }
     public Transport? Transport { get; set; }
@@ -601,7 +603,8 @@ public class TimelinePanel : PanelBase
             {
                 double timeAtMouse = (Input.MousePosition.X - hBar.X) / (double)hBar.Width * totalRange;
                 double minVisibleDuration = trackArea.Width / (double)ViewState.MaxZoom;
-                double maxVisibleDuration = trackArea.Width / (double)ViewState.MinZoom;
+                // Allow resizing up to full project duration so the scrollbar thumb can cover the whole bar
+                double maxVisibleDuration = Math.Min(totalRange, trackArea.Width / (double)ViewState.MinZoom);
                 if (_horizontalScrollResizeLeftEdge)
                 {
                     double viewEnd = ViewState.ViewStartTime + trackArea.Width / (double)ViewState.Zoom;
@@ -690,7 +693,7 @@ public class TimelinePanel : PanelBase
                 }
             }
 
-            // Horizontal scrollbar: start drag, edge resize, or click to jump
+            // Horizontal scrollbar: start drag, edge resize (thumb or track), or click to jump
             var hScrollBar = GetHorizontalScrollbarBounds(content);
             if (Input.MouseLeftPressed && hScrollBar.Contains(Input.MousePosition))
             {
@@ -713,11 +716,22 @@ public class TimelinePanel : PanelBase
                 }
                 else
                 {
-                    // Click in track: jump view so click position is at 1/3 from left
+                    // Click on track: resize from beginning/end, or jump
                     double totalRange = GetTotalTimeRange();
-                    double visibleDuration = hScrollBar.Width / (double)ViewState!.Zoom;
-                    double timeAtClick = (Input.MousePosition.X - hScrollBar.X) / (double)hScrollBar.Width * totalRange;
-                    ViewState.ViewStartTime = Math.Max(0, Math.Min(totalRange - visibleDuration, timeAtClick - visibleDuration / 3.0));
+                    if (totalRange > 0)
+                    {
+                        if (Input.MousePosition.X < thumb.X)
+                            _horizontalScrollResizeLeftEdge = true; // drag from beginning of scrollbar
+                        else if (Input.MousePosition.X > thumb.Right)
+                            _horizontalScrollResizeRightEdge = true;
+                        else
+                        {
+                            // Click in gap: jump view so click position is at 1/3 from left
+                            double visibleDuration = hScrollBar.Width / (double)ViewState!.Zoom;
+                            double timeAtClick = (Input.MousePosition.X - hScrollBar.X) / (double)hScrollBar.Width * totalRange;
+                            ViewState.ViewStartTime = Math.Max(0, Math.Min(totalRange - visibleDuration, timeAtClick - visibleDuration / 3.0));
+                        }
+                    }
                 }
             }
 
@@ -910,6 +924,8 @@ public class TimelinePanel : PanelBase
                         double snappedTime = Transport.SnapToBeat(time, ViewState?.GridSubdivisionsPerBeat ?? 4);
                         if (hitTrack != null && hitTime.HasValue)
                         {
+                            // Next drawn note will use this note's duration (Ableton/FL-style)
+                            _nextNoteDurationSeconds = hitTrack is EventTrackBase bt ? bt.GetDuration(hitTime.Value) : EventTrackConstants.DefaultEventDurationSeconds;
                             if (Selection != null)
                             {
                                 Selection.SelectedEventTrack = hitTrack;
@@ -924,12 +940,15 @@ public class TimelinePanel : PanelBase
                         }
                         else if (hitTrack != null)
                         {
-                            double defaultDuration = hitTrack is EventTrackBase bt ? bt.GetDuration(snappedTime) : EventTrackConstants.DefaultEventDurationSeconds;
-                            if (!EventsOverlap(hitTrack, snappedTime, defaultDuration, null))
+                            double duration = Math.Max(MinNoteDurationSeconds, _nextNoteDurationSeconds);
+                            if (!EventsOverlap(hitTrack, snappedTime, duration, null))
                             {
                                 hitTrack.EventTimes.Add(snappedTime);
                                 if (hitTrack is EventTrackBase baseTrack)
+                                {
                                     baseTrack.EventTimes.Sort();
+                                    baseTrack.SetDuration(snappedTime, duration);
+                                }
                             }
                             if (Selection != null)
                             {
@@ -1202,8 +1221,8 @@ public class TimelinePanel : PanelBase
             double bpm = Transport?.BPM ?? Project?.BPM ?? 120;
             int num = Project?.TimeSignatureNumerator ?? 4;
             int den = Project?.TimeSignatureDenominator ?? 4;
-            double beatOffset = Project?.BeatOffsetSeconds ?? 0;
-            TimelineGridRenderer.Draw(spriteBatch, pixel, trackArea, ViewState, bpm, num, den, beatOffset);
+            double beatStart = Project?.InTime ?? 0;
+            TimelineGridRenderer.Draw(spriteBatch, pixel, trackArea, ViewState, bpm, num, den, beatStart);
         }
 
         // Event blocks — FL Studio style: rounded corners and vertical gradient
@@ -1315,6 +1334,21 @@ public class TimelinePanel : PanelBase
         spriteBatch.Draw(pixel, hBar, new Color(45, 48, 55));
         var hThumb = GetHorizontalScrollbarThumbBounds(content);
         if (hThumb.Width > 0)
+        {
             spriteBatch.Draw(pixel, hThumb, new Color(90, 95, 105));
+            // Resize grip gizmos at left and right edges (only if thumb is wide enough)
+            if (hThumb.Width >= 2 * ScrollbarEdgeResizeWidth)
+            {
+                var gripColor = new Color(45, 50, 58);
+                int gripTop = hThumb.Y + 4;
+                int gripH = Math.Max(2, hThumb.Height - 8);
+                int leftX = hThumb.X + 3;
+                int rightX = hThumb.Right - 4;
+                spriteBatch.Draw(pixel, new Rectangle(leftX, gripTop, 1, gripH), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(leftX + 3, gripTop, 1, gripH), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(rightX - 3, gripTop, 1, gripH), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(rightX, gripTop, 1, gripH), gripColor);
+            }
+        }
     }
 }

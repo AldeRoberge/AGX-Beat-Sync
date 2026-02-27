@@ -4,6 +4,7 @@ using AGX_Beat_Sync.Editor;
 using AGX_Beat_Sync.Input;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
@@ -24,10 +25,15 @@ public class InspectorPanel : PanelBase
     public InputManager? Input { get; set; }
     public Project? Project { get; set; }
 
+    private const int NameRowHeight = 20;
     private const int TrackTypeRowHeight = 22;
     private bool _trackTypeDropdownOpen;
     private Rectangle _trackTypeValueRect;
     private Rectangle[] _trackTypeOptionRects = Array.Empty<Rectangle>();
+
+    private bool _nameFocused;
+    private string _nameEditText = "";
+    private Rectangle _nameValueRect;
 
     public InspectorPanel()
     {
@@ -67,13 +73,54 @@ public class InspectorPanel : PanelBase
             _contentHeight = 0;
             _lastSelectedTrack = Selection.SelectedEventTrack;
             _trackTypeDropdownOpen = false;
+            _nameFocused = false;
         }
 
-        int scrollableHeight = contentArea.Height - InspectorHeaderHeight - TrackTypeRowHeight;
-        int trackTypeRowY = contentArea.Y + InspectorHeaderHeight;
+        int fixedTopHeight = InspectorHeaderHeight + NameRowHeight + TrackTypeRowHeight;
+        int scrollableHeight = contentArea.Height - fixedTopHeight;
+        int nameRowY = contentArea.Y + InspectorHeaderHeight;
+        int trackTypeRowY = contentArea.Y + InspectorHeaderHeight + NameRowHeight;
+
+        // Name field: focus and edit (must run before track type so we don't steal clicks)
+        if (Selection.SelectedEventTrack is EventTrackBase currentTrack)
+        {
+            if (_nameFocused)
+            {
+                if (Input.IsKeyPressed(Keys.Back))
+                {
+                    if (_nameEditText.Length > 0)
+                        _nameEditText = _nameEditText[..^1];
+                }
+                else if (Input.IsKeyPressed(Keys.Enter) || Input.IsKeyPressed(Keys.Escape))
+                {
+                    if (Input.IsKeyPressed(Keys.Enter))
+                        currentTrack.DisplayName = string.IsNullOrWhiteSpace(_nameEditText) ? "Event Track" : _nameEditText.Trim();
+                    _nameFocused = false;
+                    return;
+                }
+                else
+                {
+                    char? c = TryGetPrintableChar(Input);
+                    if (c.HasValue && _nameEditText.Length < 64)
+                        _nameEditText += c.Value;
+                }
+                if (Input.MouseLeftPressed && !_nameValueRect.Contains(Input.MousePosition))
+                {
+                    currentTrack.DisplayName = string.IsNullOrWhiteSpace(_nameEditText) ? "Event Track" : _nameEditText.Trim();
+                    _nameFocused = false;
+                }
+                return;
+            }
+            if (Input.MouseLeftPressed && _nameValueRect.Contains(Input.MousePosition))
+            {
+                _nameFocused = true;
+                _nameEditText = currentTrack.DisplayName ?? "";
+                return;
+            }
+        }
 
         // Track type dropdown at top of inspector
-        if (Project != null && Selection.SelectedEventTrack is EventTrackBase currentTrack)
+        if (Project != null && Selection.SelectedEventTrack is EventTrackBase selectedTrack)
         {
             if (Input.MouseLeftPressed)
             {
@@ -85,18 +132,18 @@ public class InspectorPanel : PanelBase
                         if (_trackTypeOptionRects[i].Contains(Input.MousePosition))
                         {
                             string newTypeId = types[i].TrackTypeId;
-                            if (newTypeId != currentTrack.TrackTypeId)
+                            if (newTypeId != selectedTrack.TrackTypeId)
                             {
                                 var newTrack = EventTrackRegistry.CreateTrack(newTypeId);
                                 if (newTrack is EventTrackBase newBase)
                                 {
-                                    newBase.Order = currentTrack.Order;
-                                    newBase.DisplayName = currentTrack.DisplayName;
-                                    newBase.TrackColor = currentTrack.TrackColor;
-                                    newBase.EventTimes = new List<double>(currentTrack.EventTimes);
-                                    newBase.EventDurations = new Dictionary<double, double>(currentTrack.EventDurations);
+                                    newBase.Order = selectedTrack.Order;
+                                    newBase.DisplayName = types[i].DisplayName;
+                                    newBase.TrackColor = selectedTrack.TrackColor;
+                                    newBase.EventTimes = new List<double>(selectedTrack.EventTimes);
+                                    newBase.EventDurations = new Dictionary<double, double>(selectedTrack.EventDurations);
                                 }
-                                int idx = Project.EventTracks.IndexOf(currentTrack);
+                                int idx = Project.EventTracks.IndexOf(selectedTrack);
                                 if (idx >= 0)
                                 {
                                     Project.EventTracks.RemoveAt(idx);
@@ -178,8 +225,8 @@ public class InspectorPanel : PanelBase
                 }
             }
 
-            // Pass visible content area for hit-test (below track type row)
-            var scrollableY = contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight - _scrollY;
+            // Pass visible content area for hit-test (below name + track type rows)
+            var scrollableY = contentArea.Y + fixedTopHeight - _scrollY;
             var visibleArea = new Rectangle(contentArea.X, scrollableY, contentArea.Width, scrollableHeight);
             if (visibleArea.Contains(Input.MousePosition))
                 renderer.Update(Selection.SelectedEventTrack, Input, visibleArea);
@@ -197,8 +244,9 @@ public class InspectorPanel : PanelBase
             var renderer = InspectorRendererRegistry.Get(Selection.SelectedEventTrack.TrackTypeId);
             if (renderer != null)
             {
-                var scrollableRect = new Rectangle(contentArea.X, contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight, contentArea.Width, contentArea.Height - InspectorHeaderHeight - TrackTypeRowHeight);
-                int contentTop = contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight - _scrollY;
+                int fixedTop = InspectorHeaderHeight + NameRowHeight + TrackTypeRowHeight;
+                var scrollableRect = new Rectangle(contentArea.X, contentArea.Y + fixedTop, contentArea.Width, contentArea.Height - fixedTop);
+                int contentTop = contentArea.Y + fixedTop - _scrollY;
                 var shiftedArea = new Rectangle(contentArea.X, contentTop, contentArea.Width, scrollableRect.Height + _scrollY);
 
                 int sw = Math.Max(1, scrollableRect.Width);
@@ -219,11 +267,11 @@ public class InspectorPanel : PanelBase
                     gd.Viewport = new Viewport(0, 0, sw, sh);
                     gd.ScissorRectangle = new Rectangle(0, 0, sw, sh);
                     gd.Clear(new Color(38, 40, 44));
-                    var transform = Matrix.CreateTranslation(-contentArea.X, -(contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight), 0f);
+                    var transform = Matrix.CreateTranslation(-contentArea.X, -(contentArea.Y + fixedTop), 0f);
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, ScissorRasterizer, null, transform);
                     int cursorY = contentTop;
                     renderer.Draw(spriteBatch, shiftedArea, Selection.SelectedEventTrack, Input, ref cursorY);
-                    _contentHeight = Math.Max(0, cursorY - (contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight));
+                    _contentHeight = Math.Max(0, cursorY - (contentArea.Y + fixedTop));
                     spriteBatch.End();
 
                     gd.SetRenderTarget(null);
@@ -236,8 +284,14 @@ public class InspectorPanel : PanelBase
                     int headerCursorY = contentArea.Y;
                     InspectorDrawer.DrawHeader(spriteBatch, pixel, gd, contentArea.X, contentArea.Y, contentArea.Width, headerTitle, ref headerCursorY);
 
-                    // Track type row at top of inspector content
-                    int trackTypeY = contentArea.Y + InspectorHeaderHeight;
+                    // Name row
+                    int nameRowCursorY = contentArea.Y + InspectorHeaderHeight;
+                    string nameDisplay = _nameFocused ? _nameEditText : (Selection.SelectedEventTrack.DisplayName ?? "");
+                    bool nameCaretVisible = _nameFocused && (Environment.TickCount64 / 500) % 2 == 0;
+                    _nameValueRect = InspectorDrawer.DrawStringRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, contentArea.Y + InspectorHeaderHeight, contentArea.Width - InspectorDrawer.Padding * 2, "Name", nameDisplay, ref nameRowCursorY, showCaret: nameCaretVisible);
+
+                    // Track type row
+                    int trackTypeY = contentArea.Y + InspectorHeaderHeight + NameRowHeight;
                     var types = EventTrackRegistry.AllTypes;
                     var currentDesc = types.FirstOrDefault(d => d.TrackTypeId == Selection.SelectedEventTrack.TrackTypeId);
                     string typeDisplay = currentDesc?.DisplayName ?? Selection.SelectedEventTrack.TrackTypeId;
@@ -320,5 +374,68 @@ public class InspectorPanel : PanelBase
     protected override void DrawContent(SpriteBatch spriteBatch)
     {
         // Empty when we have a renderer (Draw override handles it); used when no selection
+    }
+
+    private static char? TryGetPrintableChar(InputManager input)
+    {
+        bool shift = input.IsKeyDown(Keys.LeftShift) || input.IsKeyDown(Keys.RightShift);
+        foreach (Keys key in Enum.GetValues<Keys>())
+        {
+            if (!input.IsKeyPressed(key)) continue;
+            char? c = key switch
+            {
+                Keys.Space => ' ',
+                Keys.OemMinus => shift ? '_' : '-',
+                Keys.D0 => shift ? ')' : '0',
+                Keys.D1 => shift ? '!' : '1',
+                Keys.D2 => shift ? '@' : '2',
+                Keys.D3 => shift ? '#' : '3',
+                Keys.D4 => shift ? '$' : '4',
+                Keys.D5 => shift ? '%' : '5',
+                Keys.D6 => shift ? '^' : '6',
+                Keys.D7 => shift ? '&' : '7',
+                Keys.D8 => shift ? '*' : '8',
+                Keys.D9 => shift ? '(' : '9',
+                Keys.A => (char)(shift ? 'A' : 'a'),
+                Keys.B => (char)(shift ? 'B' : 'b'),
+                Keys.C => (char)(shift ? 'C' : 'c'),
+                Keys.D => (char)(shift ? 'D' : 'd'),
+                Keys.E => (char)(shift ? 'E' : 'e'),
+                Keys.F => (char)(shift ? 'F' : 'f'),
+                Keys.G => (char)(shift ? 'G' : 'g'),
+                Keys.H => (char)(shift ? 'H' : 'h'),
+                Keys.I => (char)(shift ? 'I' : 'i'),
+                Keys.J => (char)(shift ? 'J' : 'j'),
+                Keys.K => (char)(shift ? 'K' : 'k'),
+                Keys.L => (char)(shift ? 'L' : 'l'),
+                Keys.M => (char)(shift ? 'M' : 'm'),
+                Keys.N => (char)(shift ? 'N' : 'n'),
+                Keys.O => (char)(shift ? 'O' : 'o'),
+                Keys.P => (char)(shift ? 'P' : 'p'),
+                Keys.Q => (char)(shift ? 'Q' : 'q'),
+                Keys.R => (char)(shift ? 'R' : 'r'),
+                Keys.S => (char)(shift ? 'S' : 's'),
+                Keys.T => (char)(shift ? 'T' : 't'),
+                Keys.U => (char)(shift ? 'U' : 'u'),
+                Keys.V => (char)(shift ? 'V' : 'v'),
+                Keys.W => (char)(shift ? 'W' : 'w'),
+                Keys.X => (char)(shift ? 'X' : 'x'),
+                Keys.Y => (char)(shift ? 'Y' : 'y'),
+                Keys.Z => (char)(shift ? 'Z' : 'z'),
+                Keys.NumPad0 => '0',
+                Keys.NumPad1 => '1',
+                Keys.NumPad2 => '2',
+                Keys.NumPad3 => '3',
+                Keys.NumPad4 => '4',
+                Keys.NumPad5 => '5',
+                Keys.NumPad6 => '6',
+                Keys.NumPad7 => '7',
+                Keys.NumPad8 => '8',
+                Keys.NumPad9 => '9',
+                _ => null
+            };
+            if (c.HasValue) return c;
+        }
+        return null;
     }
 }

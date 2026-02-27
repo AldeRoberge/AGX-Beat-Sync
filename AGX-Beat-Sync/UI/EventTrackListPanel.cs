@@ -154,6 +154,7 @@ public class EventTrackListPanel : PanelBase
                 track.Order = tracks.Count;
                 tracks.Add(track);
                 Selection.SelectedEventTrack = track;
+                Selection.SelectedEventTime = null;
             }
             return;
         }
@@ -189,7 +190,10 @@ public class EventTrackListPanel : PanelBase
             {
                 tracks.Remove(track);
                 if (Selection.SelectedEventTrack == track)
+                {
                     Selection.SelectedEventTrack = tracks.FirstOrDefault();
+                    Selection.SelectedEventTime = null;
+                }
                 _addDropdownOpen = false;
                 return;
             }
@@ -204,6 +208,7 @@ public class EventTrackListPanel : PanelBase
                     _dragStartPos = Input.MousePosition;
                 }
                 Selection.SelectedEventTrack = track;
+                Selection.SelectedEventTime = null;
                 _addDropdownOpen = false;
                 return;
             }

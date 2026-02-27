@@ -65,6 +65,12 @@ public class BeatSyncGame : Game
     private readonly HashSet<(int trackIndex, double eventTime)> _eventFiredSet = new();
     private double _lastPlaybackTime = -1;
 
+    /// <summary>When set, next Update shows "Saved to ..." in the status bar for a few seconds.</summary>
+    private string? _pendingSavedPath;
+    /// <summary>Current "Saved to ..." message and when it expires (TotalGameTime.TotalSeconds).</summary>
+    private string? _statusBarSavedMessage;
+    private double? _statusBarSavedMessageUntil;
+
     private bool _gameViewResizeDragging;
     private int _gameViewResizeStartY;
     private int _gameViewResizeStartHeight;
@@ -367,6 +373,14 @@ public class BeatSyncGame : Game
         Project.AudioFilePath = Path.Combine(projectDir, Project.AudioFilePath);
     }
 
+    private void UpdateWindowTitle()
+    {
+        if (string.IsNullOrWhiteSpace(_currentProjectPath))
+            Window.Title = "AGX Beat Sync";
+        else
+            Window.Title = "AGX Beat Sync - " + Path.GetFileNameWithoutExtension(_currentProjectPath);
+    }
+
     /// <summary>Shows SaveFileDialog for .agxbs on an STA thread, then saves project to the chosen path and remembers it.</summary>
     private void SaveProjectAsDialogOnStaThread()
     {
@@ -416,6 +430,7 @@ public class BeatSyncGame : Game
                 target.X, target.Y, target.Z, oyaw, opitch, odist);
             _currentProjectPath = actualPath;
             ProjectPersistence.AddRecentProjectPath(actualPath);
+            _pendingSavedPath = actualPath;
         }
         catch
         {
@@ -438,6 +453,7 @@ public class BeatSyncGame : Game
             string actualPath = ProjectPersistence.SaveToFile(Project, Transport, _currentProjectPath, TimelineView, _layout.GameViewHeightPx, _layout.GameViewWidthPx,
                 target.X, target.Y, target.Z, oyaw, opitch, odist);
             _currentProjectPath = actualPath;
+            _pendingSavedPath = actualPath;
         }
         catch
         {
@@ -509,6 +525,8 @@ public class BeatSyncGame : Game
 
     protected override void Update(GameTime gameTime)
     {
+        Transport.BeatOffsetSeconds = Project.InTime ?? 0;
+
         if (_loadSavedAudioOnStart && !string.IsNullOrWhiteSpace(Project.AudioFilePath))
         {
             _loadSavedAudioOnStart = false;
@@ -645,11 +663,19 @@ public class BeatSyncGame : Game
                         _eventConsolePanel.LogEvent(Transport.CurrentTime, track.DisplayName, message);
                         if (track is SpawnEntityTrack spawnTrack)
                         {
-                            var pos = spawnTrack.PositionMode == PositionMode.Origin ? new Vector3(0, 1, 0)
+                            var basePos = spawnTrack.PositionMode == PositionMode.Origin ? new Vector3(0, 1, 0)
                                 : spawnTrack.PositionMode == PositionMode.Absolute ? spawnTrack.PositionAbsolute
                                 : spawnTrack.PositionRelative;
-                            var rot = spawnTrack.RotationMode == RotationMode.Absolute ? spawnTrack.RotationEuler : Vector3.Zero;
-                            _gameViewPanel.SpawnEntity(pos, rot, spawnTrack.Speed);
+                            var playerPos = _gameViewPanel.GetPlayerPosition();
+                            var baseDir = spawnTrack.RotationMode == RotationMode.Towards
+                                ? (playerPos - basePos).LengthSquared() < 1e-12f ? -Vector3.UnitZ : Vector3.Normalize(playerPos - basePos)
+                                : ForwardFromEuler(spawnTrack.RotationEuler);
+                            var lifetime = spawnTrack.Lifetime;
+                            var speed = spawnTrack.Speed;
+
+                            var spawns = ExpandSpawnPattern(spawnTrack, basePos, baseDir);
+                            foreach (var (pos, dir) in spawns)
+                                _gameViewPanel.SpawnEntityWithDirection(pos, dir, speed, lifetime);
                         }
                     }
                 }
@@ -706,7 +732,7 @@ public class BeatSyncGame : Game
             _openDialogPanel.Update(gameTime, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
             if (!_openDialogPanel.IsVisible)
                 ApplyOpenDialogResult();
-            Window.Title = "AGX Beat Sync";
+            UpdateWindowTitle();
             UpdateMetrics(gameTime);
             base.Update(gameTime);
             return;
@@ -765,32 +791,10 @@ public class BeatSyncGame : Game
                     _audio.Seek(t);
             }
         };
-        _transportBar.OffsetChanged = (offset) =>
-        {
-            Project.BeatOffsetSeconds = offset;
-            Transport.BeatOffsetSeconds = offset;
-        };
-        _transportBar.OffsetEditRequested = () =>
-        {
-            double? result = null;
-            var thread = new Thread(() => result = TimeInputDialog.Show(Project.BeatOffsetSeconds, TimeFormatHelper.DefaultFramesPerSecond, "Enter offset"))
-            {
-                IsBackground = true
-            };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-            RestoreWindowFocus();
-            if (result.HasValue && result.Value >= 0)
-            {
-                Project.BeatOffsetSeconds = result.Value;
-                Transport.BeatOffsetSeconds = result.Value;
-            }
-        };
         _timelinePanel.Bounds = _layout.Timeline;
         _timelinePanel.IgnoreClickRect = _layout.DividerGrip;
 
-        Window.Title = "AGX Beat Sync";
+        UpdateWindowTitle();
         _inspectorPanel.Bounds = _layout.Inspector;
         _eventConsolePanel.Bounds = _layout.EventConsole;
         _eventConsolePanel.Input = Input;
@@ -799,7 +803,7 @@ public class BeatSyncGame : Game
         _gameViewPanel.Project = Project;
         _gameViewPanel.Transport = Transport;
 
-        Transport.BeatOffsetSeconds = Project.BeatOffsetSeconds;
+        Transport.BeatOffsetSeconds = Project.InTime ?? 0;
         _timelinePanel.Project = Project;
         _timelinePanel.Transport = Transport;
         _timelinePanel.PlayheadDisplayTime = _playheadDisplayTime;
@@ -841,7 +845,20 @@ public class BeatSyncGame : Game
             hoverText = "Event Console — click to select, Ctrl+C to copy";
         else if (_gameViewPanel.ContainsPoint(Input.MousePosition))
             hoverText = _gameViewPanel.GetHoverText(Input.MousePosition);
-        _statusBarPanel.HoverText = hoverText ?? "";
+
+        double totalSeconds = gameTime.TotalGameTime.TotalSeconds;
+        if (_pendingSavedPath != null)
+        {
+            _statusBarSavedMessage = "Saved to " + _pendingSavedPath;
+            _statusBarSavedMessageUntil = totalSeconds + 3;
+            _pendingSavedPath = null;
+        }
+        if (_statusBarSavedMessageUntil.HasValue && totalSeconds >= _statusBarSavedMessageUntil.Value)
+        {
+            _statusBarSavedMessage = null;
+            _statusBarSavedMessageUntil = null;
+        }
+        _statusBarPanel.HoverText = (_statusBarSavedMessageUntil.HasValue ? _statusBarSavedMessage : null) ?? hoverText ?? "";
         try { Mouse.SetCursor(desiredCursor ?? MouseCursor.Arrow); } catch { /* ignore on some platforms */ }
 
         _transportBar.Update(gameTime);
@@ -855,6 +872,72 @@ public class BeatSyncGame : Game
 
         UpdateMetrics(gameTime);
         base.Update(gameTime);
+    }
+
+    private static Vector3 ForwardFromEuler(Vector3 eulerRadians)
+    {
+        var rot = Matrix.CreateRotationX(eulerRadians.X) * Matrix.CreateRotationY(eulerRadians.Y) * Matrix.CreateRotationZ(eulerRadians.Z);
+        var f = Vector3.Transform(-Vector3.UnitZ, rot);
+        return f.LengthSquared() > 1e-8f ? Vector3.Normalize(f) : -Vector3.UnitZ;
+    }
+
+    private static List<(Vector3 position, Vector3 direction)> ExpandSpawnPattern(SpawnEntityTrack t, Vector3 basePos, Vector3 baseDir)
+    {
+        var list = new List<(Vector3 position, Vector3 direction)>();
+        int n = t.SpawnMode == SpawnMode.Single ? 1 : Math.Clamp(t.Count, 1, 10);
+        if (n == 1)
+        {
+            list.Add((basePos, baseDir));
+            return list;
+        }
+        switch (t.Pattern)
+        {
+            case SpawnPattern.Circle:
+            {
+                float radius = Math.Max(0f, t.CircleRadius);
+                float spanRad = t.CircleFullCircle ? MathF.PI * 2f : (t.CircleSpread * MathF.PI / 180f);
+                float start = t.CircleFullCircle ? 0f : -spanRad * 0.5f;
+                for (int i = 0; i < n; i++)
+                {
+                    float t0 = n > 1 ? (i / (float)(n - 1)) : 0.5f;
+                    float angle = start + t0 * spanRad;
+                    var dir = new Vector3(MathF.Sin(angle), 0, -MathF.Cos(angle));
+                    var pos = basePos + dir * radius;
+                    list.Add((pos, dir));
+                }
+                break;
+            }
+            case SpawnPattern.Cone:
+            {
+                float halfRad = Math.Clamp(t.ConeSpreadAngle * 0.5f, 0.01f, 179f) * MathF.PI / 180f;
+                var right = Vector3.Cross(baseDir, Vector3.UnitY);
+                if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
+                else right.Normalize();
+                for (int i = 0; i < n; i++)
+                {
+                    float t0 = n > 1 ? (i / (float)(n - 1)) * 2f - 1f : 0f;
+                    float angle = t0 * halfRad;
+                    var dir = Vector3.Normalize(baseDir * MathF.Cos(angle) + right * MathF.Sin(angle));
+                    list.Add((basePos, dir));
+                }
+                break;
+            }
+            case SpawnPattern.Line:
+            {
+                float len = Math.Max(0.001f, t.LineLength);
+                var right = Vector3.Cross(baseDir, Vector3.UnitY);
+                if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
+                else right.Normalize();
+                for (int i = 0; i < n; i++)
+                {
+                    float t0 = n > 1 ? (i / (float)(n - 1)) - 0.5f : 0f;
+                    var pos = basePos + right * (t0 * len);
+                    list.Add((pos, baseDir));
+                }
+                break;
+            }
+        }
+        return list;
     }
 
     private void UpdateMetrics(GameTime gameTime)

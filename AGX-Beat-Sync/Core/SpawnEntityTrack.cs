@@ -11,12 +11,36 @@ public class SpawnEntityTrack : EventTrackBase
         DisplayName = "Spawn Entity";
     }
 
+    // --- Universal (every spawn event) ---
     public PositionMode PositionMode { get; set; }
     public Vector3 PositionAbsolute { get; set; }
     public Vector3 PositionRelative { get; set; }
 
-    public RotationMode RotationMode { get; set; }
+    public RotationMode RotationMode { get; set; } = RotationMode.Towards;
     public Vector3 RotationEuler { get; set; }
 
-    public float Speed { get; set; } = 1f;
+    public float Speed { get; set; } = 1.8f;
+    /// <summary>Lifetime in seconds before the bullet is removed.</summary>
+    public float Lifetime { get; set; } = 5f;
+
+    // --- Mode: Single = 1 bullet, Multiple = N bullets ---
+    public SpawnMode SpawnMode { get; set; } = SpawnMode.Single;
+    /// <summary>Number of bullets when SpawnMode is Multiple (1–10).</summary>
+    public int Count { get; set; } = 3;
+
+    // --- Pattern (only when Multiple) ---
+    public SpawnPattern Pattern { get; set; } = SpawnPattern.Circle;
+
+    // Circle: radial burst
+    public float CircleRadius { get; set; } = 0.5f;
+    public bool CircleFullCircle { get; set; } = true;
+    /// <summary>Spread angle in degrees when not full circle.</summary>
+    public float CircleSpread { get; set; } = 90f;
+
+    // Cone: forward spread
+    /// <summary>Spread angle in degrees (fan).</summary>
+    public float ConeSpreadAngle { get; set; } = 45f;
+
+    // Line: bullet wall
+    public float LineLength { get; set; } = 2f;
 }

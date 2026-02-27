@@ -36,34 +36,32 @@ public static class FileAssociation
             if (classes == null) return false;
 
             // 1) Extension -> ProgId (default handler for double-click)
-                using (var extKey = classes.CreateSubKey(Extension, writable: true))
-                {
-                    if (extKey == null) return false;
-                    extKey.SetValue("", ProgId);
-                    // So we appear in "Open with" / "How do you want to open this file?" (REG_SZ "" per MS doc)
-                    using var openWithKey = extKey.CreateSubKey("OpenWithProgids", writable: true);
-                    openWithKey?.SetValue(ProgId, "", RegistryValueKind.String);
-                }
+            using (var extKey = classes.CreateSubKey(Extension, writable: true))
+            {
+                if (extKey == null) return false;
+                extKey.SetValue("", ProgId);
+                using var openWithKey = extKey.CreateSubKey("OpenWithProgids", writable: true);
+                openWithKey?.SetValue(ProgId, "", RegistryValueKind.String);
+            }
 
-                // 2) ProgId: friendly name, icon, shell open command
-                string progIdPath = ProgId;
-                using (var progKey = classes.CreateSubKey(progIdPath, writable: true))
-                {
-                    if (progKey == null) return false;
-                    progKey.SetValue("", AppName + " project");
-                }
-                using (var iconKey = classes.CreateSubKey(progIdPath + @"\DefaultIcon", writable: true))
-                    iconKey?.SetValue("", $"\"{exePath}\",0");
-                using (var openKey = classes.CreateSubKey(progIdPath + @"\shell\open\command", writable: true))
-                {
-                    if (openKey == null) return false;
-                    openKey.SetValue("", command);
-                }
+            // 2) ProgId: friendly name, icon, shell open command
+            using (var progKey = classes.CreateSubKey(ProgId, writable: true))
+            {
+                if (progKey == null) return false;
+                progKey.SetValue("", AppName + " project");
+            }
+            using (var iconKey = classes.CreateSubKey(ProgId + @"\DefaultIcon", writable: true))
+                iconKey?.SetValue("", $"\"{exePath}\",0");
+            using (var openKey = classes.CreateSubKey(ProgId + @"\shell\open\command", writable: true))
+            {
+                if (openKey == null) return false;
+                openKey.SetValue("", command);
+            }
 
-                // 3) Applications\<exe> so Windows can find this exe for "Open with" and suggest it
-                using (var appCmdKey = classes.CreateSubKey(@"Applications\" + exeName + @"\shell\open\command", writable: true))
-                {
-                    if (appCmdKey != null)
+            // 3) Applications\<exe> so Windows can find this exe for "Open with" and suggest it
+            using (var appCmdKey = classes.CreateSubKey(@"Applications\" + exeName + @"\shell\open\command", writable: true))
+            {
+                if (appCmdKey != null)
                     appCmdKey.SetValue("", command);
             }
 

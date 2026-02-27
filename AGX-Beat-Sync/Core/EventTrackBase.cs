@@ -22,21 +22,21 @@ public abstract class EventTrackBase : IEventTrack
 {
     private static readonly Random s_random = new();
 
-    /// <summary>Palette of distinct colors for new tracks (saturated, readable on dark UI).</summary>
+    /// <summary>Palette of beautiful pastel rainbow colors for new tracks.</summary>
     private static readonly Color[] s_trackColorPalette =
     {
-        new(238, 145, 100),  // orange (original)
-        new(100, 180, 220),  // blue
-        new(120, 200, 120),  // green
-        new(220, 120, 140),  // pink
-        new(200, 160, 220),  // purple
-        new(220, 200, 100),  // yellow
-        new(100, 200, 200),  // cyan
-        new(220, 140, 80),   // coral
-        new(140, 180, 220),  // light blue
-        new(180, 220, 140),  // lime
-        new(220, 160, 180),  // rose
-        new(160, 140, 220),  // violet
+        new(255, 182, 193),  // pastel pink
+        new(255, 218, 185),  // pastel peach
+        new(255, 250, 205),  // pastel lemon
+        new(189, 252, 201),  // pastel mint
+        new(176, 224, 230),  // pastel powder blue
+        new(204, 204, 255),  // pastel periwinkle
+        new(218, 191, 255),  // pastel violet
+        new(230, 200, 255),  // pastel lavender
+        new(255, 200, 220),  // pastel rose
+        new(200, 235, 255),  // pastel sky
+        new(200, 255, 220),  // pastel seafoam
+        new(255, 230, 210),  // pastel apricot
     };
 
     /// <summary>Returns a random color for a new track.</summary>
@@ -47,7 +47,7 @@ public abstract class EventTrackBase : IEventTrack
     public string DisplayName { get; set; } = "Event Track";
     public int Order { get; set; }
     /// <summary>Color used for this track's note blocks on the timeline.</summary>
-    public Color TrackColor { get; set; } = new(238, 145, 100);
+    public Color TrackColor { get; set; } = new(255, 182, 193);
     public List<double> EventTimes { get; set; } = new();
 
     /// <summary>Duration in seconds per event time. Missing key = use DefaultEventDurationSeconds.</summary>

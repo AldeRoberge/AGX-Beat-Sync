@@ -24,7 +24,8 @@ public class SfxInspectorRenderer : IInspectorRenderer
         int w = contentArea.Width - InspectorDrawer.Padding * 2;
 
         string valueText = _pathFocused ? _editText : t.FmodAudioEventPath;
-        _pathValueRect = InspectorDrawer.DrawStringRow(sb, pixel, sb.GraphicsDevice, x, y, w, "FMOD Audio Event Path", valueText, ref cursorY);
+        bool cursorVisible = _pathFocused && (Environment.TickCount64 / 500) % 2 == 0;
+        _pathValueRect = InspectorDrawer.DrawStringRow(sb, pixel, sb.GraphicsDevice, x, y, w, "FMOD Audio Event Path", valueText, ref cursorY, showCaret: cursorVisible);
     }
 
     public void Update(IEventTrack track, InputManager input, Rectangle contentArea)
