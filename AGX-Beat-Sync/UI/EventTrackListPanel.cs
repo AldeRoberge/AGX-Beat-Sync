@@ -7,19 +7,24 @@ using Microsoft.Xna.Framework.Graphics;
 namespace AGX_Beat_Sync.UI;
 
 /// <summary>
-/// Left panel: vertical list of event tracks (DAW/piano style). Dropdown to pick type + Add button; click track to select; remove via button or Delete key.
+/// Left panel: vertical list of event tracks. Click to select; drag to reorder; remove via button or Delete key. Create new track at bottom.
 /// </summary>
 public class EventTrackListPanel : PanelBase
 {
-    private const int HeaderRowHeight = 32;
     private const int TrackRowHeight = 26;
     private const int DropdownWidth = 130;
     private const int AddButtonWidth = 36;
     private const int RemoveButtonWidth = 22;
     private const int Padding = 8;
+    private const int DragThresholdPx = 4;
 
-    private bool _dropdownOpen;
+    private bool _addDropdownOpen;
     private string _selectedTypeIdForAdd = "";
+
+    private int? _potentialDragIndex;
+    private int? _draggingTrackIndex;
+    private int? _dropTargetIndex;
+    private Point _dragStartPos;
 
     public Project? Project { get; set; }
     public EditorSelection? Selection { get; set; }
@@ -31,16 +36,17 @@ public class EventTrackListPanel : PanelBase
         BackgroundColor = new Color(32, 34, 38);
     }
 
+    private int GetAddRowY()
+    {
+        if (Project == null) return ContentBounds.Y;
+        return ContentBounds.Y + Project.EventTracks.Count * TrackRowHeight;
+    }
+
     public override string? GetHoverText(Point mouse)
     {
         if (Project == null || !ContentBounds.Contains(mouse)) return null;
         var content = ContentBounds;
         int y = content.Y;
-        var dropdownRect = new Rectangle(content.X + Padding, y + 4, DropdownWidth, HeaderRowHeight - 8);
-        if (dropdownRect.Contains(mouse)) return "Track type dropdown";
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, y + 4, AddButtonWidth, HeaderRowHeight - 8);
-        if (addRect.Contains(mouse)) return "Add track";
-        y += HeaderRowHeight + (_dropdownOpen ? EventTrackRegistry.AllTypes.Count * TrackRowHeight + 8 : 0);
         foreach (var track in Project.EventTracks)
         {
             var rowRect = new Rectangle(content.X, y, content.Width, TrackRowHeight);
@@ -48,10 +54,15 @@ public class EventTrackListPanel : PanelBase
             {
                 var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
                 if (removeRect.Contains(mouse)) return $"Remove track: {track.DisplayName}";
-                return $"Track: {track.DisplayName}";
+                return $"Track: {track.DisplayName} (drag to reorder)";
             }
             y += TrackRowHeight;
         }
+        var addRowY = GetAddRowY();
+        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
+        if (dropdownRect.Contains(mouse)) return "Track type for new track";
+        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
+        if (addRect.Contains(mouse)) return "Add track";
         return "Tracks";
     }
 
@@ -61,90 +72,141 @@ public class EventTrackListPanel : PanelBase
             return;
 
         var content = ContentBounds;
+        var tracks = Project.EventTracks;
 
-        // Ensure we have a default type for add
         if (string.IsNullOrEmpty(_selectedTypeIdForAdd) && EventTrackRegistry.AllTypes.Count > 0)
             _selectedTypeIdForAdd = EventTrackRegistry.AllTypes[0].TrackTypeId;
+
+        int addRowY = GetAddRowY();
+
+        // Mouse released: commit drag reorder
+        if (Input.MouseLeftReleased)
+        {
+            if (_draggingTrackIndex.HasValue && _dropTargetIndex.HasValue && _draggingTrackIndex.Value != _dropTargetIndex.Value)
+            {
+                int from = _draggingTrackIndex.Value;
+                int to = _dropTargetIndex.Value;
+                if (from >= 0 && from < tracks.Count && to >= 0 && to < tracks.Count)
+                {
+                    var track = tracks[from];
+                    tracks.RemoveAt(from);
+                    int insertAt = to > from ? to - 1 : to;
+                    tracks.Insert(insertAt, track);
+                    for (int i = 0; i < tracks.Count; i++)
+                        tracks[i].Order = i;
+                }
+            }
+            _potentialDragIndex = null;
+            _draggingTrackIndex = null;
+            _dropTargetIndex = null;
+        }
+
+        // Update drop target while dragging
+        if (_draggingTrackIndex.HasValue && content.Contains(Input.MousePosition))
+        {
+            int mouseY = Input.MousePosition.Y - content.Y;
+            int idx = mouseY / TrackRowHeight;
+            if (idx < 0) idx = 0;
+            if (idx >= tracks.Count) idx = tracks.Count - 1;
+            _dropTargetIndex = idx;
+        }
+
+        // Start drag when mouse moves past threshold
+        if (_potentialDragIndex.HasValue && Input.MouseLeftDown)
+        {
+            int dx = Input.MousePosition.X - _dragStartPos.X;
+            int dy = Input.MousePosition.Y - _dragStartPos.Y;
+            if (dx * dx + dy * dy >= DragThresholdPx * DragThresholdPx)
+            {
+                _draggingTrackIndex = _potentialDragIndex.Value;
+                _potentialDragIndex = null;
+            }
+        }
 
         if (!Input.MouseLeftPressed)
             return;
 
         if (!content.Contains(Input.MousePosition))
         {
-            _dropdownOpen = false;
+            _addDropdownOpen = false;
             return;
         }
 
-        int y = content.Y;
-
-        // Dropdown area
-        var dropdownRect = new Rectangle(content.X + Padding, y + 4, DropdownWidth, HeaderRowHeight - 8);
+        // Add row: dropdown + Add button (at bottom)
+        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
+        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
         if (dropdownRect.Contains(Input.MousePosition))
         {
-            _dropdownOpen = !_dropdownOpen;
+            _addDropdownOpen = !_addDropdownOpen;
             return;
         }
-
-        // Add button
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, y + 4, AddButtonWidth, HeaderRowHeight - 8);
         if (addRect.Contains(Input.MousePosition))
         {
-            _dropdownOpen = false;
+            _addDropdownOpen = false;
             if (!string.IsNullOrEmpty(_selectedTypeIdForAdd))
             {
                 var track = EventTrackRegistry.CreateTrack(_selectedTypeIdForAdd);
-                track.Order = Project.EventTracks.Count;
-                Project.EventTracks.Add(track);
+                track.TrackColor = EventTrackBase.GetRandomTrackColor();
+                track.Order = tracks.Count;
+                tracks.Add(track);
                 Selection.SelectedEventTrack = track;
             }
             return;
         }
 
-        if (_dropdownOpen)
+        // Add dropdown list (below add row)
+        if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
-            int listY = content.Y + HeaderRowHeight + 4;
+            int listY = addRowY + TrackRowHeight + 4;
             foreach (var desc in EventTrackRegistry.AllTypes)
             {
                 var rowRect = new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, TrackRowHeight);
                 if (rowRect.Contains(Input.MousePosition))
                 {
                     _selectedTypeIdForAdd = desc.TrackTypeId;
-                    _dropdownOpen = false;
+                    _addDropdownOpen = false;
                     return;
                 }
                 listY += TrackRowHeight;
             }
         }
 
-        // Track list rows
-        int trackIndex = 0;
-        int trackY = content.Y + HeaderRowHeight + (_dropdownOpen ? (EventTrackRegistry.AllTypes.Count * TrackRowHeight + 8) : 0);
-        foreach (var track in Project.EventTracks)
+        // Track rows
+        int trackY = content.Y;
+        for (int i = 0; i < tracks.Count; i++)
         {
+            var track = tracks[i];
             var rowRect = new Rectangle(content.X, trackY, content.Width, TrackRowHeight);
             var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, trackY + 2, RemoveButtonWidth, TrackRowHeight - 4);
 
             if (removeRect.Contains(Input.MousePosition))
             {
-                Project.EventTracks.Remove(track);
+                tracks.Remove(track);
                 if (Selection.SelectedEventTrack == track)
-                    Selection.SelectedEventTrack = Project.EventTracks.FirstOrDefault();
+                    Selection.SelectedEventTrack = tracks.FirstOrDefault();
+                _addDropdownOpen = false;
                 return;
             }
 
             if (rowRect.Contains(Input.MousePosition) && !removeRect.Contains(Input.MousePosition))
             {
+                if (_draggingTrackIndex.HasValue)
+                    return;
+                if (!_potentialDragIndex.HasValue)
+                {
+                    _potentialDragIndex = i;
+                    _dragStartPos = Input.MousePosition;
+                }
                 Selection.SelectedEventTrack = track;
-                _dropdownOpen = false;
+                _addDropdownOpen = false;
                 return;
             }
 
             trackY += TrackRowHeight;
-            trackIndex++;
         }
 
-        if (_dropdownOpen && Input.MousePosition.Y > content.Y + HeaderRowHeight + EventTrackRegistry.AllTypes.Count * TrackRowHeight + 8)
-            _dropdownOpen = false;
+        if (Input.MousePosition.Y > addRowY + TrackRowHeight + ( _addDropdownOpen ? EventTrackRegistry.AllTypes.Count * TrackRowHeight + 8 : 0 ))
+            _addDropdownOpen = false;
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)
@@ -155,29 +217,53 @@ public class EventTrackListPanel : PanelBase
         var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
         var content = ContentBounds;
         var device = spriteBatch.GraphicsDevice;
-
+        var tracks = Project.EventTracks;
         int y = content.Y;
 
-        // Top bar: dropdown + Add
-        spriteBatch.Draw(pixel, new Rectangle(content.X, y, content.Width, HeaderRowHeight), new Color(45, 48, 54));
-        var dropdownRect = new Rectangle(content.X + Padding, y + 4, DropdownWidth, HeaderRowHeight - 8);
+        for (int index = 0; index < tracks.Count; index++)
+        {
+            var track = tracks[index];
+            bool isDragging = _draggingTrackIndex == index;
+            bool isDropTarget = _dropTargetIndex == index;
+
+            if (isDropTarget && _draggingTrackIndex.HasValue)
+            {
+                var indicatorRect = new Rectangle(content.X, y, content.Width, 2);
+                spriteBatch.Draw(pixel, indicatorRect, new Color(100, 150, 220));
+            }
+
+            if (!isDragging)
+            {
+                bool selected = Selection?.SelectedEventTrack == track;
+                var rowRect = new Rectangle(content.X, y, content.Width, TrackRowHeight);
+                var rowBg = selected ? new Color(62, 68, 78) : (index % 2 == 0 ? new Color(38, 40, 44) : new Color(35, 37, 41));
+                spriteBatch.Draw(pixel, rowRect, rowBg);
+
+                InspectorDrawer.DrawLabel(spriteBatch, device, content.X + Padding + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
+
+                var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
+                spriteBatch.Draw(pixel, removeRect, new Color(80, 50, 50));
+                InspectorDrawer.DrawLabel(spriteBatch, device, removeRect.X + 6, removeRect.Y + 2, "×", pixel);
+            }
+
+            y += TrackRowHeight;
+        }
+
+        // Create new track row at bottom
+        int addRowY = GetAddRowY();
+        spriteBatch.Draw(pixel, new Rectangle(content.X, addRowY, content.Width, TrackRowHeight), new Color(45, 48, 54));
+        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
         spriteBatch.Draw(pixel, dropdownRect, new Color(58, 62, 70));
         spriteBatch.Draw(pixel, new Rectangle(dropdownRect.X - 1, dropdownRect.Y - 1, dropdownRect.Width + 2, dropdownRect.Height + 2), new Color(70, 74, 82));
-
-        string dropdownText = _selectedTypeIdForAdd;
         var desc = EventTrackRegistry.AllTypes.FirstOrDefault(d => d.TrackTypeId == _selectedTypeIdForAdd);
-        if (desc != null)
-            dropdownText = desc.DisplayName;
+        string dropdownText = desc?.DisplayName ?? _selectedTypeIdForAdd;
         InspectorDrawer.DrawLabel(spriteBatch, device, dropdownRect.X + 6, dropdownRect.Y + 4, dropdownText.Length > 14 ? dropdownText[..14] + "…" : dropdownText, pixel);
-
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, y + 4, AddButtonWidth, HeaderRowHeight - 8);
+        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
         spriteBatch.Draw(pixel, addRect, new Color(70, 100, 130));
         InspectorDrawer.DrawLabel(spriteBatch, device, addRect.X + 10, addRect.Y + 2, "+", pixel);
+        y = addRowY + TrackRowHeight;
 
-        y += HeaderRowHeight;
-
-        // Dropdown list when open
-        if (_dropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
+        if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
             spriteBatch.Draw(pixel, new Rectangle(content.X + Padding, y, content.Width - Padding * 2, EventTrackRegistry.AllTypes.Count * TrackRowHeight + 4), new Color(42, 45, 50));
             y += 4;
@@ -189,26 +275,6 @@ public class EventTrackListPanel : PanelBase
                 InspectorDrawer.DrawLabel(spriteBatch, device, rowRect.X + 6, rowRect.Y + 4, d.DisplayName, pixel);
                 y += TrackRowHeight;
             }
-            y += 4;
-        }
-
-        // Track list
-        int index = 0;
-        foreach (var track in Project.EventTracks)
-        {
-            bool selected = Selection?.SelectedEventTrack == track;
-            var rowRect = new Rectangle(content.X, y, content.Width, TrackRowHeight);
-            var rowBg = selected ? new Color(62, 68, 78) : (index % 2 == 0 ? new Color(38, 40, 44) : new Color(35, 37, 41));
-            spriteBatch.Draw(pixel, rowRect, rowBg);
-
-            InspectorDrawer.DrawLabel(spriteBatch, device, content.X + Padding + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
-
-            var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
-            spriteBatch.Draw(pixel, removeRect, new Color(80, 50, 50));
-            InspectorDrawer.DrawLabel(spriteBatch, device, removeRect.X + 6, removeRect.Y + 2, "×", pixel);
-
-            y += TrackRowHeight;
-            index++;
         }
     }
 }

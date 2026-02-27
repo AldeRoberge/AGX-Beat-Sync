@@ -46,10 +46,11 @@ public class TimelineViewState
         ViewStartTime = Math.Max(0, ViewStartTime);
     }
 
-    public void ZoomAt(float deltaZoom, float screenX, int contentX)
+    /// <param name="zoomFactor">Multiplicative factor per step (e.g. 1.08 to zoom in, 1/1.08 to zoom out). Makes zoom-out steps finer when zoomed out.</param>
+    public void ZoomAt(float zoomFactor, float screenX, int contentX)
     {
         double timeAtCursor = ScreenToTime(screenX, contentX);
-        Zoom = Math.Clamp(Zoom + deltaZoom, MinZoom, MaxZoom);
+        Zoom = Math.Clamp(Zoom * zoomFactor, MinZoom, MaxZoom);
         // Keep the time under cursor fixed
         ViewStartTime = timeAtCursor - (screenX - contentX) / (double)Zoom;
         ViewStartTime = Math.Max(0, ViewStartTime);

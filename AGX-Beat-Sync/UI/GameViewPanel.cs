@@ -62,6 +62,20 @@ public class GameViewPanel : PanelBase
     /// <summary>True while right-drag look is active; game should hide cursor.</summary>
     public bool IsCapturingMouse => _camera.IsCapturingMouse;
 
+    /// <summary>Get current camera state for persistence (target = player position, orbit yaw/pitch/distance).</summary>
+    public (Vector3 target, float orbitYaw, float orbitPitch, float orbitDistance) GetCameraState()
+    {
+        return (_player.Position, _camera.OrbitYaw, _camera.OrbitPitch, _camera.Distance);
+    }
+
+    /// <summary>Restore camera state from saved session (player position and orbit).</summary>
+    public void SetCameraState(Vector3 target, float orbitYaw, float orbitPitch, float orbitDistance)
+    {
+        _player.SetPosition(target);
+        _camera.Target = _player.Position;
+        _camera.SetOrbitState(orbitYaw, orbitPitch, orbitDistance);
+    }
+
     private Matrix _lastView;
     private Matrix _lastProjection;
     private int _lastViewportW;

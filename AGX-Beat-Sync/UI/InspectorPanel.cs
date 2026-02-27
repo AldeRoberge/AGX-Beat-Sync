@@ -21,6 +21,12 @@ public class InspectorPanel : PanelBase
 
     public EditorSelection? Selection { get; set; }
     public InputManager? Input { get; set; }
+    public Project? Project { get; set; }
+
+    private const int TrackTypeRowHeight = 22;
+    private bool _trackTypeDropdownOpen;
+    private Rectangle _trackTypeValueRect;
+    private Rectangle[] _trackTypeOptionRects = Array.Empty<Rectangle>();
 
     public InspectorPanel()
     {
@@ -59,9 +65,62 @@ public class InspectorPanel : PanelBase
             _scrollY = 0;
             _contentHeight = 0;
             _lastSelectedTrack = Selection.SelectedEventTrack;
+            _trackTypeDropdownOpen = false;
         }
 
-        int scrollableHeight = contentArea.Height - InspectorHeaderHeight;
+        int scrollableHeight = contentArea.Height - InspectorHeaderHeight - TrackTypeRowHeight;
+        int trackTypeRowY = contentArea.Y + InspectorHeaderHeight;
+
+        // Track type dropdown at top of inspector
+        if (Project != null && Selection.SelectedEventTrack is EventTrackBase currentTrack)
+        {
+            if (Input.MouseLeftPressed)
+            {
+                if (_trackTypeDropdownOpen && _trackTypeOptionRects.Length > 0)
+                {
+                    var types = EventTrackRegistry.AllTypes;
+                    for (int i = 0; i < _trackTypeOptionRects.Length && i < types.Count; i++)
+                    {
+                        if (_trackTypeOptionRects[i].Contains(Input.MousePosition))
+                        {
+                            string newTypeId = types[i].TrackTypeId;
+                            if (newTypeId != currentTrack.TrackTypeId)
+                            {
+                                var newTrack = EventTrackRegistry.CreateTrack(newTypeId);
+                                if (newTrack is EventTrackBase newBase)
+                                {
+                                    newBase.Order = currentTrack.Order;
+                                    newBase.DisplayName = currentTrack.DisplayName;
+                                    newBase.TrackColor = currentTrack.TrackColor;
+                                    newBase.EventTimes = new List<double>(currentTrack.EventTimes);
+                                    newBase.EventDurations = new Dictionary<double, double>(currentTrack.EventDurations);
+                                }
+                                int idx = Project.EventTracks.IndexOf(currentTrack);
+                                if (idx >= 0)
+                                {
+                                    Project.EventTracks.RemoveAt(idx);
+                                    Project.EventTracks.Insert(idx, (EventTrackBase)newTrack);
+                                }
+                                else
+                                    Project.EventTracks.Add((EventTrackBase)newTrack);
+                                Selection.SelectedEventTrack = newTrack;
+                                _lastSelectedTrack = newTrack;
+                            }
+                            _trackTypeDropdownOpen = false;
+                            return;
+                        }
+                    }
+                    _trackTypeDropdownOpen = false;
+                }
+                else if (_trackTypeValueRect.Contains(Input.MousePosition))
+                {
+                    _trackTypeDropdownOpen = !_trackTypeDropdownOpen;
+                    return;
+                }
+                else
+                    _trackTypeDropdownOpen = false;
+            }
+        }
 
         // Scrollbar thumb drag (persists while mouse is down even if outside panel)
         if (_scrollbarThumbDragging)

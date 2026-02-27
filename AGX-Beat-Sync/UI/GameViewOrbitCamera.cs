@@ -33,6 +33,14 @@ public sealed class GameViewOrbitCamera
     /// <summary>Camera position in world space.</summary>
     public Vector3 Position { get; private set; }
 
+    /// <summary>Restore orbit state from saved session (yaw/pitch in radians, distance clamped).</summary>
+    public void SetOrbitState(float yaw, float pitch, float distance)
+    {
+        OrbitYaw = yaw;
+        OrbitPitch = Math.Clamp(pitch, MinPitch, MaxPitch);
+        Distance = Math.Clamp(distance, 1f, 200f);
+    }
+
     public bool IsCapturingMouse => _capturing;
 
     private bool _capturing;

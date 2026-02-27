@@ -6,9 +6,13 @@ namespace AGX_Beat_Sync.Editor;
 
 /// <summary>
 /// Renders beat grid: measure lines, beat lines, subdivision lines.
+/// When zoomed out, progressively coarsens the drawn grid so fine lines don't hide the waveform.
 /// </summary>
 public static class TimelineGridRenderer
 {
+    /// <summary>Minimum pixels between grid lines; below this we draw a coarser grid so the waveform stays visible.</summary>
+    private const double MinGridLinePixelSpacing = 10.0;
+
     public static void Draw(
         SpriteBatch spriteBatch,
         Texture2D pixel,
@@ -21,10 +25,13 @@ public static class TimelineGridRenderer
     {
         int subDiv = Math.Clamp(viewState.GridSubdivisionsPerBeat, 1, 64);
         double secondsPerBeat = 60.0 / bpm;
+        // When zoomed out, reduce drawn subdivisions so grid doesn't clutter the waveform
+        double maxSubDivByZoom = secondsPerBeat * viewState.Zoom / MinGridLinePixelSpacing;
+        int effectiveSubDiv = Math.Clamp((int)Math.Max(1, maxSubDivByZoom), 1, subDiv);
         double viewEnd = viewState.ViewEndTime(contentBounds.Width);
 
-        // Subdivision step in seconds (e.g. 1/4 beat)
-        double subStep = secondsPerBeat / subDiv;
+        // Subdivision step in seconds (effectiveSubDiv may be coarser when zoomed out)
+        double subStep = secondsPerBeat / effectiveSubDiv;
         double beatStep = secondsPerBeat;
         double measureStep = secondsPerBeat * timeSigNum; // measure = numerator beats
 

@@ -238,6 +238,21 @@ public static class InspectorDrawer
         return valueRect;
     }
 
+    /// <summary>Draw a string row: label + value text (e.g. for FMOD path). Returns the value field bounds for hit-test / edit.</summary>
+    public static Rectangle DrawStringRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY)
+    {
+        sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
+        DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
+        int valueW = Math.Max(80, w - LabelWidth - Padding * 2);
+        var valueRect = new Rectangle(x + w - valueW - Padding, y + 2, valueW, RowHeight - 4);
+        sb.Draw(pixel, valueRect, ControlBg);
+        sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
+        string displayText = string.IsNullOrEmpty(valueText) ? "..." : (valueText.Length > 24 ? valueText[..24] + "…" : valueText);
+        DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, displayText, pixel);
+        cursorY = y + RowHeight;
+        return valueRect;
+    }
+
     /// <summary>Draw three float fields for Vector3 (X, Y, Z). Each on its own row with small label. Advances cursorY by 3*RowHeight. Optional override strings for editing.</summary>
     public static void DrawVector3Rows(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, Vector3 v, ref int cursorY, string? overrideX = null, string? overrideY = null, string? overrideZ = null)
     {
