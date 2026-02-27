@@ -115,6 +115,7 @@ public class BeatSyncGame : Game
         if (fileToOpen != null && ProjectPersistence.TryLoadFromFile(fileToOpen, out var savedFile) && savedFile != null)
         {
             ProjectPersistence.ApplyState(savedFile, Project, Transport, TimelineView);
+            _playheadDisplayTime = Transport.CurrentTime;
             _currentProjectPath = fileToOpen;
             ResolveProjectAudioPath();
             ProjectPersistence.AddRecentProjectPath(fileToOpen);
@@ -136,6 +137,7 @@ public class BeatSyncGame : Game
         else if (ProjectPersistence.TryLoad(out var saved) && saved != null)
         {
             ProjectPersistence.ApplyState(saved, Project, Transport, TimelineView);
+            _playheadDisplayTime = Transport.CurrentTime;
             _savedGameViewHeightPx = saved.GameViewHeightPx;
             _savedGameViewWidthPx = saved.GameViewWidthPx != 0 ? saved.GameViewWidthPx : null;
             if (saved.CameraOrbitDistance >= 1f)
@@ -291,6 +293,7 @@ public class BeatSyncGame : Game
             if (ProjectPersistence.TryLoadFromFile(path, out var saved) && saved != null)
             {
                 ProjectPersistence.ApplyState(saved, Project, Transport, TimelineView);
+                _playheadDisplayTime = Transport.CurrentTime;
                 ApplyLayoutFromSaved(saved);
                 EnsureDefaultTracks();
                 _currentProjectPath = path;
@@ -340,6 +343,7 @@ public class BeatSyncGame : Game
             if (path != null && ProjectPersistence.TryLoadFromFile(path, out var saved) && saved != null)
             {
                 ProjectPersistence.ApplyState(saved, Project, Transport, TimelineView);
+                _playheadDisplayTime = Transport.CurrentTime;
                 ApplyLayoutFromSaved(saved);
                 EnsureDefaultTracks();
                 _currentProjectPath = path;

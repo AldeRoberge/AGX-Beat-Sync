@@ -82,6 +82,7 @@ public static class ProjectPersistence
         }
         else
         {
+            projectDir = Path.GetDirectoryName(filePath) ?? "";
             actualFilePath = filePath;
         }
 
@@ -102,7 +103,7 @@ public static class ProjectPersistence
                 ViewStartTime = timelineView?.ViewStartTime ?? 0,
                 Zoom = timelineView != null ? Math.Clamp(timelineView.Zoom, 20f, 800f) : 80f,
                 GridSubdivisionsPerBeat = timelineView != null ? Math.Clamp(timelineView.GridSubdivisionsPerBeat, TimelineViewState.MinGridSubdivisions, TimelineViewState.MaxGridSubdivisions) : 4,
-                GameViewHeightPx = gameViewHeightPx ?? 220,
+                GameViewHeightPx = gameViewHeightPx ?? 120,
                 GameViewWidthPx = gameViewWidthPx ?? 0,
                 CameraTargetX = cameraTargetX ?? 0,
                 CameraTargetY = cameraTargetY ?? 0.5f,

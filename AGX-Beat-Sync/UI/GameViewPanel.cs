@@ -85,6 +85,8 @@ public class GameViewPanel : PanelBase
     private BasicEffect? _effect;
     private VertexBuffer? _cubeBuffer;
     private IndexBuffer? _cubeIndices;
+    private VertexBuffer? _projectileBuffer;
+    private IndexBuffer? _projectileIndices;
     private VertexBuffer? _planeBuffer;
     private VertexBuffer? _gridBuffer;
     private int _gridLineCount;
@@ -153,10 +155,14 @@ public class GameViewPanel : PanelBase
 
             foreach (var e in _spawnedEntities)
             {
-                _effect.World = Matrix.CreateTranslation(e.Position);
+                var dir = e.Velocity;
+                if (dir.LengthSquared() < 1e-8f) dir = -Vector3.UnitZ;
+                else dir.Normalize();
+                var rot = RotationFromForward(-Vector3.UnitZ, dir);
+                _effect.World = rot * Matrix.CreateTranslation(e.Position);
                 _effect.CurrentTechnique.Passes[0].Apply();
-                device.SetVertexBuffer(_cubeBuffer);
-                device.Indices = _cubeIndices;
+                device.SetVertexBuffer(_projectileBuffer);
+                device.Indices = _projectileIndices;
                 device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
             }
         }
@@ -197,6 +203,32 @@ public class GameViewPanel : PanelBase
         _cubeBuffer.SetData(cubeVerts);
         _cubeIndices = new IndexBuffer(device, IndexElementSize.SixteenBits, 36, BufferUsage.None);
         _cubeIndices.SetData(cubeIndices);
+
+        // Projectile: elongated box (nose at -Z, tail at +Z), bullet-like colors
+        float pr = 0.05f;
+        float pz = 0.2f;
+        var nose = new Color(255, 220, 120);
+        var body = new Color(255, 140, 60);
+        var projVerts = new VertexPositionColor[]
+        {
+            new(new Vector3(-pr, -pr, -pz), nose),
+            new(new Vector3( pr, -pr, -pz), nose),
+            new(new Vector3( pr,  pr, -pz), nose),
+            new(new Vector3(-pr,  pr, -pz), nose),
+            new(new Vector3(-pr, -pr,  pz), body),
+            new(new Vector3( pr, -pr,  pz), body),
+            new(new Vector3( pr,  pr,  pz), body),
+            new(new Vector3(-pr,  pr,  pz), body),
+        };
+        ushort[] projIndices =
+        {
+            0, 1, 2, 0, 2, 3, 1, 5, 6, 1, 6, 2, 5, 4, 7, 5, 7, 6,
+            4, 0, 3, 4, 3, 7, 3, 2, 6, 3, 6, 7, 0, 4, 5, 0, 5, 1
+        };
+        _projectileBuffer = new VertexBuffer(device, VertexPositionColor.VertexDeclaration, 8, BufferUsage.None);
+        _projectileBuffer.SetData(projVerts);
+        _projectileIndices = new IndexBuffer(device, IndexElementSize.SixteenBits, 36, BufferUsage.None);
+        _projectileIndices.SetData(projIndices);
 
         // Plane: Y=0, 10x10 in XZ
         float s = 5f;
@@ -293,6 +325,22 @@ public class GameViewPanel : PanelBase
         int y = (int)sy - drawHeight;
         var dest = new Rectangle(viewport.X + x, viewport.Y + y, drawWidth, drawHeight);
         spriteBatch.Draw(PlayerTexture, dest, source, Color.White);
+    }
+
+    /// <summary>Rotation matrix that rotates 'from' onto 'to'. Both vectors must be unit length.</summary>
+    private static Matrix RotationFromForward(Vector3 from, Vector3 to)
+    {
+        float d = Vector3.Dot(from, to);
+        if (d >= 0.9999f) return Matrix.Identity;
+        if (d <= -0.9999f)
+        {
+            var axis = Math.Abs(Vector3.Dot(from, Vector3.UnitY)) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
+            return Matrix.CreateFromAxisAngle(Vector3.Cross(from, axis), MathF.PI);
+        }
+        var rotAxis = Vector3.Cross(from, to);
+        rotAxis.Normalize();
+        float angle = MathF.Acos(Math.Clamp(d, -1f, 1f));
+        return Matrix.CreateFromAxisAngle(rotAxis, angle);
     }
 
     private static bool ProjectWorldToScreen(Vector3 world, Matrix view, Matrix projection, int viewportW, int viewportH, out float screenX, out float screenY)

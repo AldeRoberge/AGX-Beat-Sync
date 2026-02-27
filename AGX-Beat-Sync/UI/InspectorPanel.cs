@@ -1,3 +1,4 @@
+using System.Linq;
 using AGX_Beat_Sync.Core;
 using AGX_Beat_Sync.Editor;
 using AGX_Beat_Sync.Input;
@@ -177,9 +178,9 @@ public class InspectorPanel : PanelBase
                 }
             }
 
-            // Pass visible content area for hit-test; renderer rects are in same space as draw (shifted, below header)
-            var scrollableY = contentArea.Y + InspectorHeaderHeight - _scrollY;
-            var visibleArea = new Rectangle(contentArea.X, scrollableY, contentArea.Width, contentArea.Height - InspectorHeaderHeight);
+            // Pass visible content area for hit-test (below track type row)
+            var scrollableY = contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight - _scrollY;
+            var visibleArea = new Rectangle(contentArea.X, scrollableY, contentArea.Width, scrollableHeight);
             if (visibleArea.Contains(Input.MousePosition))
                 renderer.Update(Selection.SelectedEventTrack, Input, visibleArea);
         }
@@ -196,16 +197,14 @@ public class InspectorPanel : PanelBase
             var renderer = InspectorRendererRegistry.Get(Selection.SelectedEventTrack.TrackTypeId);
             if (renderer != null)
             {
-                // Don't add bg/header to current batch — they'd be in the first flush and show as black. Do End/RT/Begin first, then draw everything in the second batch.
-                int contentTop = contentArea.Y + InspectorHeaderHeight - _scrollY;
-                var shiftedArea = new Rectangle(contentArea.X, contentTop, contentArea.Width, (contentArea.Height - InspectorHeaderHeight) + _scrollY);
-                var scrollableRect = new Rectangle(contentArea.X, contentArea.Y + InspectorHeaderHeight, contentArea.Width, contentArea.Height - InspectorHeaderHeight);
+                var scrollableRect = new Rectangle(contentArea.X, contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight, contentArea.Width, contentArea.Height - InspectorHeaderHeight - TrackTypeRowHeight);
+                int contentTop = contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight - _scrollY;
+                var shiftedArea = new Rectangle(contentArea.X, contentTop, contentArea.Width, scrollableRect.Height + _scrollY);
 
                 int sw = Math.Max(1, scrollableRect.Width);
                 int sh = Math.Max(1, scrollableRect.Height);
                 if (sw > 0 && sh > 0)
                 {
-                    // Draw inspector content to a render target so we never touch the back buffer's scissor/viewport (avoids timeline going black)
                     spriteBatch.End();
                     var gd = spriteBatch.GraphicsDevice;
                     int backBufferW = gd.PresentationParameters.BackBufferWidth;
@@ -219,26 +218,47 @@ public class InspectorPanel : PanelBase
                     gd.SetRenderTarget(_contentRenderTarget);
                     gd.Viewport = new Viewport(0, 0, sw, sh);
                     gd.ScissorRectangle = new Rectangle(0, 0, sw, sh);
-                    gd.Clear(new Color(38, 40, 44)); // match panel background
-                    var transform = Matrix.CreateTranslation(-contentArea.X, -(contentArea.Y + InspectorHeaderHeight), 0f);
+                    gd.Clear(new Color(38, 40, 44));
+                    var transform = Matrix.CreateTranslation(-contentArea.X, -(contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight), 0f);
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, ScissorRasterizer, null, transform);
                     int cursorY = contentTop;
                     renderer.Draw(spriteBatch, shiftedArea, Selection.SelectedEventTrack, Input, ref cursorY);
-                    _contentHeight = Math.Max(0, cursorY - (contentArea.Y + InspectorHeaderHeight));
+                    _contentHeight = Math.Max(0, cursorY - (contentArea.Y + InspectorHeaderHeight + TrackTypeRowHeight));
                     spriteBatch.End();
 
-                    // Restore back buffer explicitly (SetRenderTargets(savedTargets) can leave viewport wrong on some setups)
                     gd.SetRenderTarget(null);
                     gd.Viewport = new Viewport(0, 0, backBufferW, backBufferH);
                     gd.ScissorRectangle = new Rectangle(0, 0, backBufferW, backBufferH);
 
                     spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
-                    // Draw panel bg and header in this batch so they're not in the first (black) flush
                     DrawPanelBackground(spriteBatch);
                     string headerTitle = Selection.SelectedEventTime.HasValue ? "Inspector: Note" : "Inspector: Track";
                     int headerCursorY = contentArea.Y;
                     InspectorDrawer.DrawHeader(spriteBatch, pixel, gd, contentArea.X, contentArea.Y, contentArea.Width, headerTitle, ref headerCursorY);
+
+                    // Track type row at top of inspector content
+                    int trackTypeY = contentArea.Y + InspectorHeaderHeight;
+                    var types = EventTrackRegistry.AllTypes;
+                    var currentDesc = types.FirstOrDefault(d => d.TrackTypeId == Selection.SelectedEventTrack.TrackTypeId);
+                    string typeDisplay = currentDesc?.DisplayName ?? Selection.SelectedEventTrack.TrackTypeId;
+                    int trackTypeCursorY = trackTypeY;
+                    _trackTypeValueRect = InspectorDrawer.DrawEnumRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeY, contentArea.Width - InspectorDrawer.Padding * 2, "Track Type", typeDisplay, ref trackTypeCursorY);
+                    if (!_trackTypeDropdownOpen)
+                        _trackTypeOptionRects = Array.Empty<Rectangle>();
+
                     spriteBatch.Draw(_contentRenderTarget, scrollableRect, new Rectangle(0, 0, sw, sh), Color.White);
+
+                    // Draw dropdown on top of scrollable content so it isn't covered
+                    if (_trackTypeDropdownOpen && types.Count > 0)
+                    {
+                        int selectedIdx = 0;
+                        for (int i = 0; i < types.Count; i++)
+                        {
+                            if (types[i].TrackTypeId == Selection.SelectedEventTrack.TrackTypeId) { selectedIdx = i; break; }
+                        }
+                        var optionNames = types.Select(t => t.DisplayName).ToArray();
+                        (_, _trackTypeOptionRects) = InspectorDrawer.DrawDropdownList(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeCursorY, contentArea.Width - InspectorDrawer.Padding * 2, optionNames, selectedIdx, ref trackTypeCursorY, Input.MousePosition);
+                    }
                 }
                 else
                 {

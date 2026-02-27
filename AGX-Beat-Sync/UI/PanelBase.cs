@@ -37,7 +37,7 @@ public abstract class PanelBase
     }
 
     public Rectangle HeaderBounds => new(Bounds.X, Bounds.Y, Bounds.Width, HeaderHeight);
-    public Rectangle ContentBounds => new(Bounds.X, Bounds.Y + HeaderHeight, Bounds.Width, Bounds.Height - HeaderHeight);
+    public virtual Rectangle ContentBounds => new(Bounds.X, Bounds.Y + HeaderHeight, Bounds.Width, Bounds.Height - HeaderHeight);
 
     public virtual void Update(GameTime gameTime) { }
 

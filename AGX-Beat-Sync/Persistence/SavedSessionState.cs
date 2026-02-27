@@ -10,6 +10,7 @@ public class SavedSessionState
     public double BeatOffsetSeconds { get; set; }
     public double? InTime { get; set; }
     public double? OutTime { get; set; }
+    /// <summary>Playhead position in seconds. Saved and restored so timeline position is preserved.</summary>
     public double CurrentTime { get; set; }
     public List<Core.AutomationTrack> AutomationTracks { get; set; } = new();
     public List<Core.EventTrackBase> EventTracks { get; set; } = new();
@@ -20,7 +21,7 @@ public class SavedSessionState
     public int GridSubdivisionsPerBeat { get; set; } = 4;
 
     /// <summary>Layout: game view panel height in pixels. Restored on launch so divider position is preserved.</summary>
-    public int GameViewHeightPx { get; set; } = 220;
+    public int GameViewHeightPx { get; set; } = 120;
 
     /// <summary>Layout: game view panel width in pixels (bottom row). 0 = use default fraction. Restored on launch.</summary>
     public int GameViewWidthPx { get; set; }

@@ -16,7 +16,11 @@ public class EventTrackListPanel : PanelBase
     private const int AddButtonWidth = 36;
     private const int RemoveButtonWidth = 22;
     private const int Padding = 8;
+    /// <summary>Right padding so the delete buttons don't sit flush against the piano roll. Filled with panel background.</summary>
+    private const int RightPaddingPx = 8;
     private const int DragThresholdPx = 4;
+
+    public override Rectangle ContentBounds => new(Bounds.X, Bounds.Y + HeaderHeight, Bounds.Width - RightPaddingPx, Bounds.Height - HeaderHeight);
 
     private bool _addDropdownOpen;
     private string _selectedTypeIdForAdd = "";
@@ -154,10 +158,12 @@ public class EventTrackListPanel : PanelBase
             return;
         }
 
-        // Add dropdown list (below add row)
+        // Add dropdown list (below or above add row depending on space)
         if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
-            int listY = addRowY + TrackRowHeight + 4;
+            int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            int listY = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
             foreach (var desc in EventTrackRegistry.AllTypes)
             {
                 var rowRect = new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, TrackRowHeight);
@@ -205,8 +211,16 @@ public class EventTrackListPanel : PanelBase
             trackY += TrackRowHeight;
         }
 
-        if (Input.MousePosition.Y > addRowY + TrackRowHeight + ( _addDropdownOpen ? EventTrackRegistry.AllTypes.Count * TrackRowHeight + 8 : 0 ))
-            _addDropdownOpen = false;
+        // Close dropdown when clicking below/above the list (depending on open direction)
+        if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
+        {
+            int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            int listTop = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
+            int listBottom = listTop + dropdownHeight;
+            if (Input.MousePosition.Y < listTop || Input.MousePosition.Y > listBottom)
+                _addDropdownOpen = false;
+        }
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)
@@ -265,15 +279,18 @@ public class EventTrackListPanel : PanelBase
 
         if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
-            spriteBatch.Draw(pixel, new Rectangle(content.X + Padding, y, content.Width - Padding * 2, EventTrackRegistry.AllTypes.Count * TrackRowHeight + 4), new Color(42, 45, 50));
-            y += 4;
+            int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            int listY = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
+            spriteBatch.Draw(pixel, new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, dropdownHeight), new Color(42, 45, 50));
+            listY += 4;
             foreach (var d in EventTrackRegistry.AllTypes)
             {
-                var rowRect = new Rectangle(content.X + Padding, y, content.Width - Padding * 2, TrackRowHeight);
+                var rowRect = new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, TrackRowHeight);
                 bool hover = rowRect.Contains(Input?.MousePosition ?? Point.Zero);
                 spriteBatch.Draw(pixel, rowRect, hover ? new Color(55, 58, 65) : new Color(48, 51, 56));
                 InspectorDrawer.DrawLabel(spriteBatch, device, rowRect.X + 6, rowRect.Y + 4, d.DisplayName, pixel);
-                y += TrackRowHeight;
+                listY += TrackRowHeight;
             }
         }
     }

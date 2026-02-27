@@ -23,6 +23,8 @@ public class TimelinePanel : PanelBase
     private const int MinScrollbarThumbHeight = 24;
     private const int MinHorizontalScrollbarThumbWidth = 56;
     private const double MinTotalTimeRange = 60.0;
+    /// <summary>Width of the draggable strip at each end of the scrollbar thumb (FL Studio-style resize).</summary>
+    private const int ScrollbarEdgeResizeWidth = 8;
 
     /// <summary>First visible row index for vertical scroll (each row = one event track).</summary>
     private int _laneScrollOffset;
@@ -30,6 +32,10 @@ public class TimelinePanel : PanelBase
     private bool _horizontalScrollDragging;
     private int _horizontalScrollDragStartPixel;
     private double _horizontalScrollDragStartTime;
+    /// <summary>Horizontal scrollbar: dragging left edge of thumb to resize view (zoom from left).</summary>
+    private bool _horizontalScrollResizeLeftEdge;
+    /// <summary>Horizontal scrollbar: dragging right edge of thumb to resize view (zoom from right).</summary>
+    private bool _horizontalScrollResizeRightEdge;
     /// <summary>Vertical scrollbar: dragging the lane thumb.</summary>
     private bool _verticalScrollDragging;
     private int _verticalScrollDragStartY;
@@ -86,24 +92,28 @@ public class TimelinePanel : PanelBase
 
     /// <summary>FL Studio-style dark background for the piano roll area.</summary>
     private static readonly Color PianoRollBackground = new(28, 30, 34);
-    /// <summary>Neutral gradient (white to light gray) so we can tint by track color.</summary>
-    private static readonly Color NoteFillTop = Color.White;
-    private static readonly Color NoteFillBottom = new(220, 220, 220);
-    /// <summary>Subtle border so rounded shape reads clearly (not flat white).</summary>
-    private static readonly Color NoteBorder = new(200, 200, 205);
-    private static readonly Color NoteSelectedFillTop = Color.White;
-    private static readonly Color NoteSelectedFillBottom = new(230, 230, 230);
-    private static readonly Color NoteSelectedBorder = new(190, 190, 195);
-    /// <summary>Resize handle — soft so it doesn’t look blocky.</summary>
-    private static readonly Color NoteResizeHandle = new(180, 180, 185);
+    /// <summary>Note gradient top (subtle highlight).</summary>
+    private static readonly Color NoteFillTop = new(238, 145, 100);
+    /// <summary>Note gradient bottom (subtle shadow).</summary>
+    private static readonly Color NoteFillBottom = new(218, 115, 75);
+    /// <summary>Note border for definition.</summary>
+    private static readonly Color NoteBorder = new(150, 75, 45);
+    /// <summary>Selected note gradient top.</summary>
+    private static readonly Color NoteSelectedFillTop = new(248, 178, 132);
+    /// <summary>Selected note gradient bottom.</summary>
+    private static readonly Color NoteSelectedFillBottom = new(238, 158, 112);
+    /// <summary>Selected note border.</summary>
+    private static readonly Color NoteSelectedBorder = new(210, 125, 80);
+    /// <summary>Resize handle (visual cue for drag-to-resize).</summary>
+    private static readonly Color NoteResizeHandle = new(110, 55, 30);
 
-    /// <summary>Note texture size — 2x resolution so 9-slice corners scale down and stay crisp.</summary>
+    /// <summary>Note texture: rounded rect with large corner radius so it reads clearly when scaled (pill shape).</summary>
     private const int NoteTextureWidth = 128;
     private const int NoteTextureHeight = 48;
-    /// <summary>Corner radius in texture (2x of draw radius for smooth scale-down).</summary>
+    /// <summary>Corner radius in texture — large so scaled notes stay obviously rounded, not square.</summary>
     private const int NoteTextureCornerRadius = 16;
-    /// <summary>Corner radius when drawing (on-screen) — larger = rounder, less square.</summary>
-    private const int NoteCornerRadius = 8;
+    /// <summary>Corner radius when drawing (used for resize handle inset etc.).</summary>
+    private const int NoteCornerRadius = 4;
     private static Texture2D? s_noteFillTexture;
     private static Texture2D? s_noteSelectedFillTexture;
     private static Texture2D? s_noteBorderTexture;
@@ -392,6 +402,8 @@ public class TimelinePanel : PanelBase
                 CutTrackWithRange(_noteMoveTrack, _noteMoveEventTime, _noteMoveEventTime + duration, _noteMoveEventTime);
             }
             _horizontalScrollDragging = false;
+            _horizontalScrollResizeLeftEdge = false;
+            _horizontalScrollResizeRightEdge = false;
             _verticalScrollDragging = false;
             _playheadBulbDragging = false;
             _playheadStripDragging = false;
@@ -579,6 +591,41 @@ public class TimelinePanel : PanelBase
             }
         }
 
+        // Horizontal scrollbar thumb edge resize (FL Studio-style): drag left/right edge of thumb to zoom
+        if ((_horizontalScrollResizeLeftEdge || _horizontalScrollResizeRightEdge) && Input.MouseLeftDown && ViewState != null)
+        {
+            var trackArea = GetTrackContentBounds(content);
+            var hBar = GetHorizontalScrollbarBounds(content);
+            double totalRange = GetTotalTimeRange();
+            if (totalRange > 0 && hBar.Width > 0)
+            {
+                double timeAtMouse = (Input.MousePosition.X - hBar.X) / (double)hBar.Width * totalRange;
+                double minVisibleDuration = trackArea.Width / (double)ViewState.MaxZoom;
+                double maxVisibleDuration = trackArea.Width / (double)ViewState.MinZoom;
+                if (_horizontalScrollResizeLeftEdge)
+                {
+                    double viewEnd = ViewState.ViewStartTime + trackArea.Width / (double)ViewState.Zoom;
+                    timeAtMouse = Math.Clamp(timeAtMouse, 0, viewEnd - minVisibleDuration);
+                    double newVisibleDuration = viewEnd - timeAtMouse;
+                    newVisibleDuration = Math.Clamp(newVisibleDuration, minVisibleDuration, maxVisibleDuration);
+                    ViewState.Zoom = (float)(trackArea.Width / newVisibleDuration);
+                    ViewState.Zoom = Math.Clamp(ViewState.Zoom, ViewState.MinZoom, ViewState.MaxZoom);
+                    ViewState.ViewStartTime = Math.Max(0, Math.Min(totalRange - trackArea.Width / ViewState.Zoom, timeAtMouse));
+                }
+                else
+                {
+                    timeAtMouse = Math.Clamp(timeAtMouse, ViewState.ViewStartTime + minVisibleDuration, totalRange);
+                    double newVisibleDuration = timeAtMouse - ViewState.ViewStartTime;
+                    newVisibleDuration = Math.Clamp(newVisibleDuration, minVisibleDuration, maxVisibleDuration);
+                    ViewState.Zoom = (float)(trackArea.Width / newVisibleDuration);
+                    ViewState.Zoom = Math.Clamp(ViewState.Zoom, ViewState.MinZoom, ViewState.MaxZoom);
+                    double viewEnd = ViewState.ViewStartTime + trackArea.Width / (double)ViewState.Zoom;
+                    if (viewEnd > totalRange)
+                        ViewState.ViewStartTime = Math.Max(0, totalRange - trackArea.Width / (double)ViewState.Zoom);
+                }
+            }
+        }
+
         // Horizontal scrollbar drag (runs even if mouse leaves panel); thumb follows cursor 1:1
         if (_horizontalScrollDragging && Input.MouseLeftDown && ViewState != null)
         {
@@ -643,16 +690,26 @@ public class TimelinePanel : PanelBase
                 }
             }
 
-            // Horizontal scrollbar: start drag or click to jump
+            // Horizontal scrollbar: start drag, edge resize, or click to jump
             var hScrollBar = GetHorizontalScrollbarBounds(content);
             if (Input.MouseLeftPressed && hScrollBar.Contains(Input.MousePosition))
             {
                 var thumb = GetHorizontalScrollbarThumbBounds(content);
                 if (thumb.Contains(Input.MousePosition))
                 {
-                    _horizontalScrollDragging = true;
-                    _horizontalScrollDragStartPixel = Input.MousePosition.X;
-                    _horizontalScrollDragStartTime = ViewState!.ViewStartTime;
+                    int edgeW = Math.Min(ScrollbarEdgeResizeWidth, Math.Max(0, thumb.Width / 2));
+                    var leftEdgeRect = new Rectangle(thumb.X, thumb.Y, edgeW, thumb.Height);
+                    var rightEdgeRect = new Rectangle(thumb.Right - edgeW, thumb.Y, edgeW, thumb.Height);
+                    if (leftEdgeRect.Contains(Input.MousePosition))
+                        _horizontalScrollResizeLeftEdge = true;
+                    else if (rightEdgeRect.Contains(Input.MousePosition))
+                        _horizontalScrollResizeRightEdge = true;
+                    else
+                    {
+                        _horizontalScrollDragging = true;
+                        _horizontalScrollDragStartPixel = Input.MousePosition.X;
+                        _horizontalScrollDragStartTime = ViewState!.ViewStartTime;
+                    }
                 }
                 else
                 {
@@ -1184,9 +1241,12 @@ public class TimelinePanel : PanelBase
                     fillTex = selected ? s_noteSelectedFillTexture : s_noteFillTexture;
                     borderTex = selected ? s_noteSelectedBorderTexture : s_noteBorderTexture;
                     int x = (int)fx;
-                    // Border behind (1px outline) and fill using 9-slice so corners stay round when note is stretched
-                    DrawRoundedRect9Slice(spriteBatch, borderTex, x - 1, y - 1, blockW + 2, h + 2, selBorderTint);
-                    DrawRoundedRect9Slice(spriteBatch, fillTex, x, y, blockW, h, fillTint);
+                    // Draw full rounded-rect texture scaled to note size so the rounded shape is always visible (no 9-slice squashing)
+                    var borderDest = new Rectangle(x - 1, y - 1, blockW + 2, h + 2);
+                    var fillDest = new Rectangle(x, y, blockW, h);
+                    var fullSource = new Rectangle(0, 0, NoteTextureWidth, NoteTextureHeight);
+                    spriteBatch.Draw(borderTex, borderDest, fullSource, selBorderTint);
+                    spriteBatch.Draw(fillTex, fillDest, fullSource, fillTint);
                     // Resize handles: pill-shaped with rounded ends when note is wide enough (zoomed in)
                     if (blockW >= MinNoteWidthForResize && blockW >= NoteResizeHandleWidth && h > NoteCornerRadius * 2 && s_resizeHandlePillTexture != null)
                     {

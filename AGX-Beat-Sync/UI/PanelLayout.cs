@@ -16,7 +16,8 @@ public class PanelLayout
     private const float GameViewWidthFraction = 0.45f;
     public const int MinGameViewWidth = 220;
     public const int MinEventConsoleWidth = 200;
-    public const int DefaultGameViewHeight = 220;
+    /// <summary>Default height of the bottom row (game view + event console). Kept small so the timeline gets most of the vertical space.</summary>
+    public const int DefaultGameViewHeight = 120;
     public const int MinGameViewHeight = 80;
     public const int MinTimelineHeight = 100;
     public const int StatusBarHeight = 26;
