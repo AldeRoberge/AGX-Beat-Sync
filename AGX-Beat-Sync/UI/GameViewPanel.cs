@@ -7,41 +7,73 @@ using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
+/// <summary>One spawned entity in the game view (from a Spawn Entity event).</summary>
+public class SpawnedEntity
+{
+    public Vector3 Position;
+    public Vector3 Velocity;
+    public float SpawnTime;
+}
+
 public class GameViewPanel : PanelBase
 {
-    private const int ControlBarHeight = 28;
-    private const int ButtonWidth = 60;
-    private const int ButtonMargin = 6;
-    private const int BackgroundOptionCount = 3;
-    private const int EnemyOptionCount = 3;
-    private const float CameraMoveSpeed = 300f;
-    private const float ProjectileSpeed = 280f;
-    private const float ProjectileLifetime = 2.5f;
-
     public Input.InputManager? Input { get; set; }
     public Project? Project { get; set; }
     public Transport? Transport { get; set; }
+    public GraphicsDevice? GraphicsDevice { get; set; }
+    /// <summary>Four-frame sprite (0=right, 1=down, 2=left, 3=up). Set from game LoadContent.</summary>
+    public Texture2D? PlayerTexture { get; set; }
 
-    /// <summary>When true, game view expands over the timeline area. Set by layout from this each frame.</summary>
-    public bool Expanded { get; set; }
+    private readonly List<SpawnedEntity> _spawnedEntities = new();
+    private readonly GameViewPlayer _player = new();
+    private readonly GameViewOrbitCamera _camera = new();
 
-    private const int ExpandButtonWidth = 28;
-
-    private int _selectedBackground;
-    private int _selectedEnemy;
-    private Vector2 _cameraPosition;
-
-    private readonly List<Projectile> _projectiles = new();
-    private double _lastEventTime;
-    private bool _hadLastEventTime;
-    private bool _wasPlaying;
-
-    private sealed class Projectile
+    /// <summary>Spawn an entity at the given world position with velocity (direction * speed). Called when a Spawn Entity event fires.</summary>
+    public void SpawnEntity(Vector3 position, Vector3 rotationEulerRadians, float speed)
     {
-        public Vector2 Position;
-        public Vector2 Velocity;
-        public float Lifetime;
+        var rot = Matrix.CreateRotationX(rotationEulerRadians.X) * Matrix.CreateRotationY(rotationEulerRadians.Y) * Matrix.CreateRotationZ(rotationEulerRadians.Z);
+        var forward = Vector3.Transform(-Vector3.UnitZ, rot);
+        if (forward.LengthSquared() > 0.0001f)
+            forward.Normalize();
+        _spawnedEntities.Add(new SpawnedEntity
+        {
+            Position = position,
+            Velocity = forward * speed,
+            SpawnTime = (float)(Transport?.CurrentTime ?? 0)
+        });
     }
+
+    public override string? GetHoverText(Point mouse)
+    {
+        if (!ContainsPoint(mouse)) return null;
+        var content = ContentBounds;
+        var viewportRect = new Rectangle(content.X, content.Y, content.Width, Math.Max(0, content.Height));
+        if (viewportRect.Contains(mouse))
+            return "Game View — WASD move player. Middle-drag: orbit. Right-drag: FPS camera. Q/E: orbit yaw";
+        return "Game View";
+    }
+
+    /// <summary>Clear all spawned entities (e.g. when user seeks or stops).</summary>
+    public void ClearSpawnedEntities()
+    {
+        _spawnedEntities.Clear();
+    }
+
+    /// <summary>True while right-drag look is active; game should hide cursor.</summary>
+    public bool IsCapturingMouse => _camera.IsCapturingMouse;
+
+    private Matrix _lastView;
+    private Matrix _lastProjection;
+    private int _lastViewportW;
+    private int _lastViewportH;
+
+    private RenderTarget2D? _renderTarget;
+    private BasicEffect? _effect;
+    private VertexBuffer? _cubeBuffer;
+    private IndexBuffer? _cubeIndices;
+    private VertexBuffer? _planeBuffer;
+    private VertexBuffer? _gridBuffer;
+    private int _gridLineCount;
 
     public GameViewPanel()
     {
@@ -49,382 +81,215 @@ public class GameViewPanel : PanelBase
         BackgroundColor = new Color(24, 26, 30);
     }
 
-    public override void Update(GameTime gameTime)
+    /// <summary>Call before Draw(spriteBatch) to render 3D scene into the panel's render target.</summary>
+    public void Draw3DScene()
     {
-        float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-
-        UpdateBeatEvents(dt);
-        UpdateCameraAndUi(dt);
-    }
-
-    private void UpdateBeatEvents(float dt)
-    {
-        if (Project == null || Transport == null)
-            return;
-
-        bool playing = Transport.IsPlaying;
-        double currentTime = Transport.CurrentTime;
-
-        if (!playing)
-        {
-            _hadLastEventTime = false;
-            _projectiles.Clear();
-            _wasPlaying = false;
-            return;
-        }
-
-        if (!_wasPlaying || !_hadLastEventTime)
-        {
-            _lastEventTime = currentTime;
-            _hadLastEventTime = true;
-        }
-        else if (currentTime >= _lastEventTime)
-        {
-            SpawnProjectilesBetween(_lastEventTime, currentTime);
-            _lastEventTime = currentTime;
-        }
-        else
-        {
-            _lastEventTime = currentTime;
-        }
-
-        _wasPlaying = playing;
-
-        for (int i = _projectiles.Count - 1; i >= 0; i--)
-        {
-            var p = _projectiles[i];
-            p.Position += p.Velocity * dt;
-            p.Lifetime -= dt;
-            if (p.Lifetime <= 0)
-                _projectiles.RemoveAt(i);
-        }
-    }
-
-    private void SpawnProjectilesBetween(double fromTime, double toTime)
-    {
-        if (Project == null || Project.NoteTracks.Count == 0)
-            return;
-
-        var track = Project.NoteTracks[0];
-        if (track.Notes.Count == 0)
-            return;
-
-        foreach (var note in track.Notes)
-        {
-            if (note.Time > fromTime && note.Time <= toTime)
-            {
-                SpawnProjectileForNote(note);
-            }
-        }
-    }
-
-    private void SpawnProjectileForNote(NoteEvent note)
-    {
-        Vector2 origin = GetEnemyWorldPosition();
-
-        float angle;
-        int lane = Math.Max(0, note.Lane);
-        switch (lane % 4)
-        {
-            case 0: angle = -MathF.PI / 2f; break;           // up
-            case 1: angle = -MathF.PI / 4f; break;           // up-right
-            case 2: angle = MathF.PI / 4f; break;            // down-right
-            default: angle = MathF.PI / 2f; break;           // down
-        }
-
-        var velocity = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * ProjectileSpeed;
-
-        _projectiles.Add(new Projectile
-        {
-            Position = origin,
-            Velocity = velocity,
-            Lifetime = ProjectileLifetime
-        });
-    }
-
-    private void UpdateCameraAndUi(float dt)
-    {
-        if (Input == null)
-            return;
-
-        if (ContainsPoint(Input.MousePosition))
-        {
-            var move = Vector2.Zero;
-            if (Input.IsKeyDown(Keys.W)) move.Y -= 1;
-            if (Input.IsKeyDown(Keys.S)) move.Y += 1;
-            if (Input.IsKeyDown(Keys.A)) move.X -= 1;
-            if (Input.IsKeyDown(Keys.D)) move.X += 1;
-
-            if (move != Vector2.Zero)
-            {
-                move.Normalize();
-                _cameraPosition += move * CameraMoveSpeed * dt;
-            }
-
-            HandleControlClicks();
-        }
-
-        // Expand/collapse button in header (works even when mouse not over content)
-        if (Input.MouseLeftPressed && GetExpandButtonRect().Contains(Input.MousePosition))
-            Expanded = !Expanded;
-    }
-
-    private Rectangle GetExpandButtonRect()
-    {
-        var header = HeaderBounds;
-        return new Rectangle(header.Right - ExpandButtonWidth, header.Y, ExpandButtonWidth, header.Height);
-    }
-
-    private void HandleControlClicks()
-    {
-        if (Input == null || !Input.MouseLeftPressed)
+        var device = GraphicsDevice;
+        if (device == null)
             return;
 
         var content = ContentBounds;
-        var controls = new Rectangle(content.X, content.Y, content.Width, ControlBarHeight);
-        if (!controls.Contains(Input.MousePosition))
+        int w = Math.Max(1, content.Width);
+        int h = Math.Max(1, content.Height);
+        if (h <= 0) h = 1;
+
+        if (_renderTarget == null || _renderTarget.Width != w || _renderTarget.Height != h)
+        {
+            _renderTarget?.Dispose();
+            _renderTarget = new RenderTarget2D(device, w, h, false, SurfaceFormat.Color, DepthFormat.Depth24);
+        }
+
+        Ensure3DResources(device);
+
+        var prevTargets = device.GetRenderTargets();
+        device.SetRenderTarget(_renderTarget);
+        device.DepthStencilState = DepthStencilState.Default;
+        device.RasterizerState = RasterizerState.CullCounterClockwise;
+        device.Clear(ClearOptions.Target | ClearOptions.DepthBuffer, new Color(20, 22, 26), 1f, 0);
+
+        if (_effect != null && _cubeBuffer != null && _planeBuffer != null)
+        {
+            float aspect = (float)w / h;
+            _lastProjection = Matrix.CreatePerspectiveFieldOfView(MathF.PI / 4f, aspect, 0.1f, 1000f);
+            _camera.Target = _player.Position;
+            _lastView = _camera.GetViewMatrix();
+            _lastViewportW = w;
+            _lastViewportH = h;
+            _effect.Projection = _lastProjection;
+            _effect.View = _lastView;
+            _effect.World = Matrix.Identity;
+            _effect.CurrentTechnique.Passes[0].Apply();
+
+            device.SetVertexBuffer(_planeBuffer);
+            device.Indices = null;
+            device.DrawPrimitives(PrimitiveType.TriangleList, 0, 2);
+
+            if (_gridBuffer != null)
+            {
+                device.SetVertexBuffer(_gridBuffer);
+                device.DrawPrimitives(PrimitiveType.LineList, 0, _gridLineCount);
+            }
+
+            // Static blue cube at world origin
+            _effect.World = Matrix.CreateTranslation(Vector3.Zero);
+            _effect.CurrentTechnique.Passes[0].Apply();
+            device.SetVertexBuffer(_cubeBuffer);
+            device.Indices = _cubeIndices;
+            device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
+
+            foreach (var e in _spawnedEntities)
+            {
+                _effect.World = Matrix.CreateTranslation(e.Position);
+                _effect.CurrentTechnique.Passes[0].Apply();
+                device.SetVertexBuffer(_cubeBuffer);
+                device.Indices = _cubeIndices;
+                device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
+            }
+        }
+
+        device.SetRenderTargets(prevTargets);
+    }
+
+    private void Ensure3DResources(GraphicsDevice device)
+    {
+        if (_effect != null)
             return;
 
-        for (int i = 0; i < BackgroundOptionCount; i++)
+        _effect = new BasicEffect(device)
         {
-            if (GetBackgroundButtonRect(content, i).Contains(Input.MousePosition))
-            {
-                _selectedBackground = i;
-                return;
-            }
-        }
+            VertexColorEnabled = true,
+            LightingEnabled = false
+        };
 
-        for (int i = 0; i < EnemyOptionCount; i++)
+        // Cube: 1x1x1 centered at origin -> 8 vertices, 12 triangles
+        var cubeVerts = new VertexPositionColor[8];
+        float h = 0.5f;
+        cubeVerts[0] = new VertexPositionColor(new Vector3(-h, -h, -h), new Color(92, 148, 255));
+        cubeVerts[1] = new VertexPositionColor(new Vector3( h, -h, -h), new Color(92, 148, 255));
+        cubeVerts[2] = new VertexPositionColor(new Vector3( h,  h, -h), new Color(132, 188, 255));
+        cubeVerts[3] = new VertexPositionColor(new Vector3(-h,  h, -h), new Color(132, 188, 255));
+        cubeVerts[4] = new VertexPositionColor(new Vector3(-h, -h,  h), new Color(110, 170, 255));
+        cubeVerts[5] = new VertexPositionColor(new Vector3( h, -h,  h), new Color(110, 170, 255));
+        cubeVerts[6] = new VertexPositionColor(new Vector3( h,  h,  h), new Color(150, 200, 255));
+        cubeVerts[7] = new VertexPositionColor(new Vector3(-h,  h,  h), new Color(150, 200, 255));
+
+        ushort[] cubeIndices =
         {
-            if (GetEnemyButtonRect(content, i).Contains(Input.MousePosition))
-            {
-                _selectedEnemy = i;
-                return;
-            }
+            0, 1, 2, 0, 2, 3, 1, 5, 6, 1, 6, 2, 5, 4, 7, 5, 7, 6,
+            4, 0, 3, 4, 3, 7, 3, 2, 6, 3, 6, 7, 0, 4, 5, 0, 5, 1
+        };
+
+        _cubeBuffer = new VertexBuffer(device, VertexPositionColor.VertexDeclaration, 8, BufferUsage.None);
+        _cubeBuffer.SetData(cubeVerts);
+        _cubeIndices = new IndexBuffer(device, IndexElementSize.SixteenBits, 36, BufferUsage.None);
+        _cubeIndices.SetData(cubeIndices);
+
+        // Plane: Y=0, 10x10 in XZ
+        float s = 5f;
+        var planeVerts = new VertexPositionColor[6];
+        var planeColor = new Color(52, 56, 64);
+        planeVerts[0] = new VertexPositionColor(new Vector3(-s, 0, -s), planeColor);
+        planeVerts[1] = new VertexPositionColor(new Vector3( s, 0, -s), planeColor);
+        planeVerts[2] = new VertexPositionColor(new Vector3(-s, 0,  s), planeColor);
+        planeVerts[3] = new VertexPositionColor(new Vector3(-s, 0,  s), planeColor);
+        planeVerts[4] = new VertexPositionColor(new Vector3( s, 0, -s), planeColor);
+        planeVerts[5] = new VertexPositionColor(new Vector3( s, 0,  s), planeColor);
+
+        _planeBuffer = new VertexBuffer(device, VertexPositionColor.VertexDeclaration, 6, BufferUsage.None);
+        _planeBuffer.SetData(planeVerts);
+
+        // Grid on Y=0: lines in XZ to match plane extent (±5), spacing 1
+        const float gridExtent = 5f;
+        const float gridSpacing = 1f;
+        var gridColor = new Color(70, 76, 88);
+        var gridVerts = new List<VertexPositionColor>();
+        for (float z = -gridExtent; z <= gridExtent; z += gridSpacing)
+        {
+            gridVerts.Add(new VertexPositionColor(new Vector3(-gridExtent, 0.001f, z), gridColor));
+            gridVerts.Add(new VertexPositionColor(new Vector3( gridExtent, 0.001f, z), gridColor));
         }
+        for (float x = -gridExtent; x <= gridExtent; x += gridSpacing)
+        {
+            gridVerts.Add(new VertexPositionColor(new Vector3(x, 0.001f, -gridExtent), gridColor));
+            gridVerts.Add(new VertexPositionColor(new Vector3(x, 0.001f,  gridExtent), gridColor));
+        }
+        _gridLineCount = gridVerts.Count / 2;
+        _gridBuffer = new VertexBuffer(device, VertexPositionColor.VertexDeclaration, gridVerts.Count, BufferUsage.None);
+        _gridBuffer.SetData(gridVerts.ToArray());
     }
 
-    private static Rectangle GetBackgroundButtonRect(Rectangle content, int index)
+    public override void Update(GameTime gameTime)
     {
-        int x = content.X + ButtonMargin + index * (ButtonWidth + ButtonMargin);
-        int y = content.Y + 4;
-        int h = ControlBarHeight - 8;
-        return new Rectangle(x, y, ButtonWidth, h);
-    }
+        float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        var content = ContentBounds;
+        var viewportRect = new Rectangle(content.X, content.Y, content.Width, Math.Max(0, content.Height));
 
-    private static Rectangle GetEnemyButtonRect(Rectangle content, int index)
-    {
-        int startX = content.X + ButtonMargin + BackgroundOptionCount * (ButtonWidth + ButtonMargin) + 24;
-        int x = startX + index * (ButtonWidth + ButtonMargin);
-        int y = content.Y + 4;
-        int h = ControlBarHeight - 8;
-        return new Rectangle(x, y, ButtonWidth, h);
+        _camera.Target = _player.Position;
+        _camera.HandleInput(Input, viewportRect, dt);
+
+        if (_camera.IsCapturingMouse)
+            _player.SetPosition(_camera.Target); // FPS mode: player follows camera target
+        else
+        {
+            var (forwardXZ, rightXZ) = _camera.GetCameraForwardRightXZ();
+            _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
+        }
+
+        foreach (var e in _spawnedEntities)
+            e.Position += e.Velocity * dt;
     }
 
     public override void Draw(SpriteBatch spriteBatch)
     {
-        base.Draw(spriteBatch);
-        DrawExpandButton(spriteBatch);
-    }
-
-    private void DrawExpandButton(SpriteBatch spriteBatch)
-    {
+        DrawPanelBackground(spriteBatch);
+        var content = ContentBounds;
+        var viewport = new Rectangle(content.X, content.Y, content.Width, content.Height);
         var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
-        var rect = GetExpandButtonRect();
-        var bg = new Color(60, 65, 75);
-        var icon = new Color(200, 205, 215);
-        spriteBatch.Draw(pixel, rect, bg);
-        int cx = rect.X + rect.Width / 2;
-        int cy = rect.Y + rect.Height / 2;
-        int arrow = 6;
-        if (Expanded)
+
+        if (viewport.Height > 0 && viewport.Width > 0 && _renderTarget != null)
         {
-            for (int i = -arrow; i <= arrow; i++)
-            {
-                int j = (i * (rect.Height / 2 - 2)) / arrow;
-                spriteBatch.Draw(pixel, new Rectangle(cx + i - 1, cy - j, 2, 2), icon);
-            }
+            spriteBatch.Draw(_renderTarget, viewport, new Rectangle(0, 0, _renderTarget.Width, _renderTarget.Height), Color.White);
+            // Pixel-perfect (nearest-neighbor) for character sprite
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, null, RasterizerState.CullNone);
+            DrawPlayerOverlay(spriteBatch, viewport);
+            spriteBatch.End();
+            spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
         }
         else
-        {
-            for (int i = -arrow; i <= arrow; i++)
-            {
-                int j = (i * (rect.Width / 2 - 2)) / arrow;
-                spriteBatch.Draw(pixel, new Rectangle(cx - j, cy + i - 1, 2, 2), icon);
-            }
-        }
+            spriteBatch.Draw(pixel, viewport, new Color(20, 22, 26));
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)
     {
-        var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
-        var content = ContentBounds;
-
-        var controls = new Rectangle(content.X, content.Y, content.Width, ControlBarHeight);
-        var viewport = new Rectangle(content.X, content.Y + ControlBarHeight, content.Width, content.Height - ControlBarHeight);
-
-        DrawControls(spriteBatch, pixel, controls);
-        DrawWorld(spriteBatch, pixel, viewport);
+        // Game view uses custom Draw() for player overlay with PointClamp
     }
 
-    private void DrawControls(SpriteBatch spriteBatch, Texture2D pixel, Rectangle controls)
+    private void DrawPlayerOverlay(SpriteBatch spriteBatch, Rectangle viewport)
     {
-        var bgStrip = new Color(36, 39, 45);
-        var buttonBg = new Color(52, 56, 64);
-        var buttonSelected = new Color(92, 148, 255);
-        var buttonSelectedBorder = new Color(132, 188, 255);
-
-        spriteBatch.Draw(pixel, controls, bgStrip);
-
-        for (int i = 0; i < BackgroundOptionCount; i++)
-        {
-            var rect = GetBackgroundButtonRect(controls, i);
-            bool selected = i == _selectedBackground;
-            var color = selected ? buttonSelected : buttonBg;
-            spriteBatch.Draw(pixel, rect, color);
-            if (selected)
-            {
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), buttonSelectedBorder);
-            }
-        }
-
-        for (int i = 0; i < EnemyOptionCount; i++)
-        {
-            var rect = GetEnemyButtonRect(controls, i);
-            bool selected = i == _selectedEnemy;
-            var color = selected ? buttonSelected : buttonBg;
-            spriteBatch.Draw(pixel, rect, color);
-            if (selected)
-            {
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 1), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Bottom - 1, rect.Width, 1), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.X, rect.Y, 1, rect.Height), buttonSelectedBorder);
-                spriteBatch.Draw(pixel, new Rectangle(rect.Right - 1, rect.Y, 1, rect.Height), buttonSelectedBorder);
-            }
-        }
-    }
-
-    private void DrawWorld(SpriteBatch spriteBatch, Texture2D pixel, Rectangle viewport)
-    {
-        if (viewport.Height <= 0 || viewport.Width <= 0)
+        if (PlayerTexture == null || _lastViewportW <= 0 || _lastViewportH <= 0)
             return;
-
-        DrawBackground(spriteBatch, pixel, viewport);
-
-        var originScreen = WorldToScreen(Vector2.Zero, viewport);
-
-        var axisColor = new Color(90, 95, 105);
-        spriteBatch.Draw(pixel, new Rectangle((int)originScreen.X - 1, viewport.Y, 2, viewport.Height), axisColor);
-        spriteBatch.Draw(pixel, new Rectangle(viewport.X, (int)originScreen.Y - 1, viewport.Width, 2), axisColor);
-
-        DrawEnemy(spriteBatch, pixel, viewport, originScreen);
-        DrawProjectiles(spriteBatch, pixel, viewport);
+        Vector3 worldPos = _player.Position;
+        if (!ProjectWorldToScreen(worldPos, _lastView, _lastProjection, _lastViewportW, _lastViewportH, out float sx, out float sy))
+            return;
+        var source = _player.GetSourceRectangle(PlayerTexture);
+        const int drawHeight = 24;
+        int drawWidth = drawHeight * source.Width / Math.Max(1, source.Height);
+        int x = (int)sx - drawWidth / 2;
+        int y = (int)sy - drawHeight;
+        var dest = new Rectangle(viewport.X + x, viewport.Y + y, drawWidth, drawHeight);
+        spriteBatch.Draw(PlayerTexture, dest, source, Color.White);
     }
 
-    private void DrawBackground(SpriteBatch spriteBatch, Texture2D pixel, Rectangle viewport)
+    private static bool ProjectWorldToScreen(Vector3 world, Matrix view, Matrix projection, int viewportW, int viewportH, out float screenX, out float screenY)
     {
-        switch (_selectedBackground)
-        {
-            default:
-            case 0:
-                spriteBatch.Draw(pixel, viewport, new Color(20, 22, 26));
-                break;
-            case 1:
-                spriteBatch.Draw(pixel, viewport, new Color(16, 18, 22));
-                int gridSize = 40;
-                var gridColor = new Color(40, 44, 52);
-                for (int x = viewport.X; x < viewport.Right; x += gridSize)
-                    spriteBatch.Draw(pixel, new Rectangle(x, viewport.Y, 1, viewport.Height), gridColor);
-                for (int y = viewport.Y; y < viewport.Bottom; y += gridSize)
-                    spriteBatch.Draw(pixel, new Rectangle(viewport.X, y, viewport.Width, 1), gridColor);
-                break;
-            case 2:
-                spriteBatch.Draw(pixel, viewport, new Color(12, 14, 20));
-                int stripeHeight = 24;
-                var stripeColor1 = new Color(26, 30, 40);
-                var stripeColor2 = new Color(18, 20, 28);
-                for (int i = 0; i * stripeHeight < viewport.Height; i++)
-                {
-                    var rect = new Rectangle(viewport.X, viewport.Y + i * stripeHeight, viewport.Width, stripeHeight);
-                    if (rect.Bottom > viewport.Bottom)
-                        rect.Height = viewport.Bottom - rect.Y;
-                    spriteBatch.Draw(pixel, rect, (i & 1) == 0 ? stripeColor1 : stripeColor2);
-                }
-                break;
-        }
-    }
-
-    private void DrawEnemy(SpriteBatch spriteBatch, Texture2D pixel, Rectangle viewport, Vector2 originScreen)
-    {
-        var enemyColor = new Color(230, 130, 90);
-        var enemySecondary = new Color(180, 90, 60);
-
-        Vector2 enemyWorldPos = GetEnemyWorldPosition();
-        var enemyScreen = WorldToScreen(enemyWorldPos, viewport);
-
-        switch (_selectedEnemy)
-        {
-            default:
-            case 0:
-                int size = 40;
-                var rect = new Rectangle((int)enemyScreen.X - size / 2, (int)enemyScreen.Y - size / 2, size, size);
-                spriteBatch.Draw(pixel, rect, enemySecondary);
-                spriteBatch.Draw(pixel, new Rectangle(rect.X + 4, rect.Y + 4, rect.Width - 8, rect.Height - 8), enemyColor);
-                break;
-            case 1:
-                int radius = 26;
-                for (int y = -radius; y <= radius; y++)
-                {
-                    int span = (int)Math.Sqrt(radius * radius - y * y);
-                    var row = new Rectangle((int)enemyScreen.X - span, (int)enemyScreen.Y + y, span * 2, 1);
-                    spriteBatch.Draw(pixel, row, enemyColor);
-                }
-                break;
-            case 2:
-                int triHeight = 46;
-                for (int y = 0; y < triHeight; y++)
-                {
-                    float t = y / (float)triHeight;
-                    int halfWidth = (int)(t * triHeight);
-                    int sx = (int)enemyScreen.X - halfWidth;
-                    int sy = (int)enemyScreen.Y + y - triHeight / 2;
-                    spriteBatch.Draw(pixel, new Rectangle(sx, sy, halfWidth * 2, 1), enemyColor);
-                }
-                break;
-        }
-    }
-
-    private Vector2 GetEnemyWorldPosition()
-    {
-        return _selectedEnemy switch
-        {
-            1 => new Vector2(80, -40),
-            2 => new Vector2(-120, 40),
-            _ => new Vector2(0, -80)
-        };
-    }
-
-    private void DrawProjectiles(SpriteBatch spriteBatch, Texture2D pixel, Rectangle viewport)
-    {
-        var color = new Color(255, 220, 150);
-        foreach (var p in _projectiles)
-        {
-            var screen = WorldToScreen(p.Position, viewport);
-            int size = 10;
-            var rect = new Rectangle((int)screen.X - size / 2, (int)screen.Y - size / 2, size, size);
-            if (!viewport.Intersects(rect))
-                continue;
-            spriteBatch.Draw(pixel, rect, color);
-        }
-    }
-
-    private Vector2 WorldToScreen(Vector2 world, Rectangle viewport)
-    {
-        return new Vector2(
-            viewport.Center.X + (world.X - _cameraPosition.X),
-            viewport.Center.Y + (world.Y - _cameraPosition.Y));
+        var clip = Vector4.Transform(new Vector4(world, 1f), view * projection);
+        if (clip.W <= 0.0001f) { screenX = screenY = 0; return false; }
+        float ndcX = clip.X / clip.W;
+        float ndcY = clip.Y / clip.W;
+        if (ndcX < -1f || ndcX > 1f || ndcY < -1f || ndcY > 1f) { screenX = screenY = 0; return false; }
+        screenX = (ndcX + 1f) * 0.5f * viewportW;
+        screenY = (1f - ndcY) * 0.5f * viewportH;
+        return true;
     }
 }

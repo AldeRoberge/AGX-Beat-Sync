@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 
@@ -6,14 +9,36 @@ namespace AGX_Beat_Sync.Input;
 /// <summary>
 /// Centralized input: mouse, keyboard, drag state.
 /// Call Update() once per frame at the start of Update.
+/// Keyboard state merges GameWindow KeyDown/KeyUp events with Keyboard.GetState() so shortcuts work regardless of backend.
 /// </summary>
 public class InputManager
 {
     private MouseState _mousePrev;
     private KeyboardState _keyPrev;
+    private readonly HashSet<Keys> _eventKeysDown = new();
+    private readonly object _keysLock = new();
 
     public MouseState Mouse { get; private set; }
     public KeyboardState Keyboard { get; private set; }
+
+    /// <summary>Called from GameWindow.KeyDown to track key state.</summary>
+    public void OnKeyDown(Keys key)
+    {
+        if (key == Keys.None) return;
+        lock (_keysLock) { _eventKeysDown.Add(key); }
+    }
+
+    /// <summary>Called from GameWindow.KeyUp to track key state.</summary>
+    public void OnKeyUp(Keys key)
+    {
+        lock (_keysLock) { _eventKeysDown.Remove(key); }
+    }
+
+    /// <summary>Clear event-tracked keys (e.g. when window loses focus).</summary>
+    public void ClearKeys()
+    {
+        lock (_keysLock) { _eventKeysDown.Clear(); }
+    }
 
     public Point MousePosition => Mouse.Position;
     public bool MouseLeftDown => Mouse.LeftButton == ButtonState.Pressed;
@@ -25,6 +50,7 @@ public class InputManager
     public bool MouseMiddlePressed => Mouse.MiddleButton == ButtonState.Pressed && _mousePrev.MiddleButton == ButtonState.Released;
 
     public bool MouseLeftReleased => Mouse.LeftButton == ButtonState.Released && _mousePrev.LeftButton == ButtonState.Pressed;
+    public bool MouseRightReleased => Mouse.RightButton == ButtonState.Released && _mousePrev.RightButton == ButtonState.Pressed;
     public bool MouseMiddleReleased => Mouse.MiddleButton == ButtonState.Released && _mousePrev.MiddleButton == ButtonState.Pressed;
 
     public int ScrollWheelDelta => Mouse.ScrollWheelValue - _mousePrev.ScrollWheelValue;
@@ -40,16 +66,63 @@ public class InputManager
     public Point? DragStart => _dragStart;
     public Point DragDelta => _dragStart.HasValue ? new Point(MousePosition.X - _dragStart.Value.X, MousePosition.Y - _dragStart.Value.Y) : Point.Zero;
 
-    public void Update()
+    /// <summary>Update input state. Pass true when the game window is the active window (e.g. IsActive).</summary>
+    public void Update(bool gameWindowActive = true)
     {
         _mousePrev = Mouse;
         _keyPrev = Keyboard;
         Mouse = Microsoft.Xna.Framework.Input.Mouse.GetState();
-        Keyboard = Microsoft.Xna.Framework.Input.Keyboard.GetState();
+
+        // Merge: MonoGame polling + KeyDown/KeyUp events + Windows GetAsyncKeyState when active (fallback when MonoGame input fails)
+        var polled = Microsoft.Xna.Framework.Input.Keyboard.GetState();
+        var merged = new HashSet<Keys>();
+        foreach (var k in polled.GetPressedKeys())
+            merged.Add(k);
+        lock (_keysLock)
+        {
+            foreach (var k in _eventKeysDown)
+                merged.Add(k);
+        }
+        if (gameWindowActive && OperatingSystem.IsWindows())
+            MergeWindowsKeyState(merged);
+        Keyboard = merged.Count > 0 ? new KeyboardState(merged.ToArray()) : new KeyboardState();
 
         if (MouseLeftPressed || MouseMiddlePressed)
             _dragStart = MousePosition;
         if (MouseLeftReleased || MouseMiddleReleased)
             _dragStart = null;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int vKey);
+
+    private static void MergeWindowsKeyState(HashSet<Keys> into)
+    {
+        // Virtual key codes (winuser.h); high bit of return = key is down
+        int VK_SPACE = 0x20, VK_DELETE = 0x2E, VK_O = 0x4F, VK_S = 0x53, VK_Z = 0x5A, VK_Y = 0x59;
+        int VK_1 = 0x31, VK_2 = 0x32, VK_OEM_4 = 0xDB, VK_OEM_6 = 0xDD;
+        int VK_LSHIFT = 0xA0, VK_RSHIFT = 0xA1, VK_LCONTROL = 0xA2, VK_RCONTROL = 0xA3;
+        if ((GetAsyncKeyState(VK_SPACE) & 0x8000) != 0) into.Add(Keys.Space);
+        if ((GetAsyncKeyState(VK_DELETE) & 0x8000) != 0) into.Add(Keys.Delete);
+        if ((GetAsyncKeyState(VK_O) & 0x8000) != 0) into.Add(Keys.O);
+        if ((GetAsyncKeyState(VK_S) & 0x8000) != 0) into.Add(Keys.S);
+        if ((GetAsyncKeyState(VK_Z) & 0x8000) != 0) into.Add(Keys.Z);
+        if ((GetAsyncKeyState(VK_Y) & 0x8000) != 0) into.Add(Keys.Y);
+        if ((GetAsyncKeyState(VK_1) & 0x8000) != 0) into.Add(Keys.D1);
+        if ((GetAsyncKeyState(VK_2) & 0x8000) != 0) into.Add(Keys.D2);
+        if ((GetAsyncKeyState(VK_OEM_4) & 0x8000) != 0) into.Add(Keys.OemOpenBrackets);
+        if ((GetAsyncKeyState(VK_OEM_6) & 0x8000) != 0) into.Add(Keys.OemCloseBrackets);
+        if ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0) into.Add(Keys.LeftShift);
+        if ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0) into.Add(Keys.RightShift);
+        if ((GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0) into.Add(Keys.LeftControl);
+        if ((GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0) into.Add(Keys.RightControl);
+        // WASD / QE / C for game view
+        if ((GetAsyncKeyState(0x57) & 0x8000) != 0) into.Add(Keys.W);
+        if ((GetAsyncKeyState(0x41) & 0x8000) != 0) into.Add(Keys.A);
+        if ((GetAsyncKeyState(0x53) & 0x8000) != 0) into.Add(Keys.S);
+        if ((GetAsyncKeyState(0x44) & 0x8000) != 0) into.Add(Keys.D);
+        if ((GetAsyncKeyState(0x51) & 0x8000) != 0) into.Add(Keys.Q);
+        if ((GetAsyncKeyState(0x45) & 0x8000) != 0) into.Add(Keys.E);
+        if ((GetAsyncKeyState(0x43) & 0x8000) != 0) into.Add(Keys.C);
     }
 }

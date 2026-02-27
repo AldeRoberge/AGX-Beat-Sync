@@ -7,13 +7,14 @@ namespace AGX_Beat_Sync.Services;
 /// </summary>
 public static class TimeInputDialog
 {
-    public static double? Show(double currentSeconds, int fps = TimeFormatHelper.DefaultFramesPerSecond)
+    /// <param name="title">Optional dialog title; default is "Go to time (HH:mm:ss:frame)".</param>
+    public static double? Show(double currentSeconds, int fps = TimeFormatHelper.DefaultFramesPerSecond, string? title = null)
     {
         double? result = null;
         string current = TimeFormatHelper.Format(currentSeconds, fps);
         using var form = new Form
         {
-            Text = "Go to time (HH:mm:ss:frame)",
+            Text = title ?? "Go to time (HH:mm:ss:frame)",
             FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterScreen,
             Width = 280,
@@ -38,9 +39,19 @@ public static class TimeInputDialog
             Width = 75,
             DialogResult = DialogResult.OK
         };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            Left = 92,
+            Top = 42,
+            Width = 75,
+            DialogResult = DialogResult.Cancel
+        };
         form.AcceptButton = ok;
+        form.CancelButton = cancel;
         form.Controls.Add(textBox);
         form.Controls.Add(ok);
+        form.Controls.Add(cancel);
         if (form.ShowDialog() == DialogResult.OK)
         {
             var parsed = TimeFormatHelper.Parse(textBox.Text, fps);

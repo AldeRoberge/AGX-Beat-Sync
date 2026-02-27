@@ -1,0 +1,8 @@
+# AGX Beat Sync Content
+# Build with MGCB; output is written to the directory specified when invoking mgcb (e.g. bin/Content).
+
+/platform:DesktopGL
+/importer:TextureImporter
+/processor:TextureProcessor
+/processorParam:ColorKeyEnabled=False
+/build:player.png

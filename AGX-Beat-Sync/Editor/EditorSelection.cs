@@ -4,49 +4,24 @@ namespace AGX_Beat_Sync.Editor;
 
 /// <summary>
 /// Currently selected objects for the inspector and editing commands.
+/// Unified: selection is event tracks (and optionally a specific event time on the timeline).
 /// </summary>
 public class EditorSelection
 {
-    public NoteEvent? SelectedNote { get; set; }
-    public NoteTrack? SelectedNoteTrack { get; set; }
-    /// <summary>When set, all selected notes (multi-select). Primary for inspector is SelectedNote.</summary>
-    public List<NoteEvent> SelectedNotes { get; set; } = new();
     public AutomationKeyframe? SelectedKeyframe { get; set; }
     public AutomationTrack? SelectedAutomationTrack { get; set; }
+    /// <summary>Selected event track. Inspector shows this track's properties; timeline highlights its row and events.</summary>
+    public IEventTrack? SelectedEventTrack { get; set; }
+    /// <summary>Selected event time (seconds) on the timeline. Null if no specific event is selected.</summary>
+    public double? SelectedEventTime { get; set; }
 
     public void Clear()
     {
-        SelectedNote = null;
-        SelectedNoteTrack = null;
-        SelectedNotes.Clear();
         SelectedKeyframe = null;
         SelectedAutomationTrack = null;
+        SelectedEventTrack = null;
+        SelectedEventTime = null;
     }
 
-    public bool HasSelection => SelectedNote != null || SelectedNotes.Count > 0 || SelectedKeyframe != null;
-
-    /// <summary>True if the given note is in the current selection.</summary>
-    public bool IsSelected(NoteEvent note)
-    {
-        if (note == null) return false;
-        if (SelectedNotes.Count > 0) return SelectedNotes.Contains(note);
-        return SelectedNote == note;
-    }
-
-    /// <summary>Set selection to a single note.</summary>
-    public void SetSingle(NoteEvent? note, NoteTrack? track)
-    {
-        SelectedNote = note;
-        SelectedNoteTrack = track;
-        SelectedNotes.Clear();
-        if (note != null) SelectedNotes.Add(note);
-    }
-
-    /// <summary>Set selection to all notes in the track.</summary>
-    public void SetAllNotes(NoteTrack track)
-    {
-        SelectedNoteTrack = track;
-        SelectedNotes = new List<NoteEvent>(track.Notes);
-        SelectedNote = SelectedNotes.Count > 0 ? SelectedNotes[0] : null;
-    }
+    public bool HasSelection => SelectedKeyframe != null || SelectedEventTrack != null;
 }

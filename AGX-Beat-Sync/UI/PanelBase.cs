@@ -1,5 +1,6 @@
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
@@ -68,4 +69,10 @@ public abstract class PanelBase
 
     /// <summary>Whether the given point is inside this panel's bounds.</summary>
     public bool ContainsPoint(Point point) => Bounds.Contains(point);
+
+    /// <summary>Optional hover description for the given point. Override in panels to show what the cursor is over.</summary>
+    public virtual string? GetHoverText(Point mouse) => null;
+
+    /// <summary>Optional cursor to show when the mouse is over this panel at the given point. Return null for default arrow.</summary>
+    public virtual MouseCursor? GetDesiredCursor(Point mouse) => null;
 }

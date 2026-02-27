@@ -29,6 +29,7 @@ public static class InspectorDrawer
     public static readonly Color FoldoutArrow = new(180, 185, 195);
     public static readonly Color ControlBg = new(58, 62, 70);
     public static readonly Color ControlBorder = new(70, 74, 82);
+    public static readonly Color DropdownHoverBg = new(65, 70, 78);
 
     public static Texture2D? GetLabelTexture(GraphicsDevice device, string text)
     {
@@ -67,7 +68,8 @@ public static class InspectorDrawer
                 {
                     g2.Clear(System.Drawing.Color.Transparent);
                     g2.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                    g2.DrawString(text, font, System.Drawing.Brushes.White, 0, 0);
+                    using var whiteBrush = new SolidBrush(System.Drawing.Color.White);
+                    g2.DrawString(text, font, whiteBrush, 0, 0);
                 }
                 return BitmapToTexture(device, bitmap, w, h);
             }
@@ -109,9 +111,15 @@ public static class InspectorDrawer
 
     public static void DrawLabel(SpriteBatch sb, GraphicsDevice device, int x, int y, string text, Texture2D? pixel)
     {
+        DrawLabel(sb, device, x, y, text, pixel, TextColor);
+    }
+
+    /// <summary>Draw a label with an explicit tint color (e.g. for overlays/dialogs where TextColor may not be visible).</summary>
+    public static void DrawLabel(SpriteBatch sb, GraphicsDevice device, int x, int y, string text, Texture2D? pixel, Color tint)
+    {
         var tex = GetLabelTexture(device, text);
         if (tex != null)
-            sb.Draw(tex, new Vector2(x, y), TextColor);
+            sb.Draw(tex, new Vector2(x, y), tint);
     }
 
     /// <summary>Draw a section header (e.g. track type name). Returns the height used.</summary>
@@ -173,7 +181,7 @@ public static class InspectorDrawer
         return RowHeight;
     }
 
-    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right. Returns the bounds of the value button for hit-testing.</summary>
+    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right with dropdown arrow. Returns the bounds of the value button for hit-testing.</summary>
     public static Rectangle DrawEnumRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY)
     {
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
@@ -183,8 +191,37 @@ public static class InspectorDrawer
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
         DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
+        // Dropdown arrow (small triangle)
+        int ax = valueRect.Right - 12;
+        int ay = valueRect.Y + valueRect.Height / 2;
+        for (int i = -3; i <= 3; i++)
+            for (int j = 0; j <= 4 - Math.Abs(i); j++)
+                sb.Draw(pixel, new Rectangle(ax + i, ay - 2 + j, 1, 1), FoldoutArrow);
         cursorY = y + RowHeight;
         return valueRect;
+    }
+
+    /// <summary>Draw an open dropdown list of options below the current cursor. Returns the full dropdown rect and per-option rects for hit-testing. Optional mouse position highlights the option under the cursor.</summary>
+    public static (Rectangle dropdownRect, Rectangle[] optionRects) DrawDropdownList(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string[] options, int selectedIndex, ref int cursorY, Microsoft.Xna.Framework.Point? mouse = null)
+    {
+        int listH = options.Length * RowHeight;
+        var dropdownRect = new Rectangle(x, y, w, listH);
+        sb.Draw(pixel, dropdownRect, SectionBg);
+        sb.Draw(pixel, new Rectangle(x - 1, y - 1, w + 2, listH + 2), ControlBorder);
+        var optionRects = new Rectangle[options.Length];
+        for (int i = 0; i < options.Length; i++)
+        {
+            var rowRect = new Rectangle(x, y + i * RowHeight, w, RowHeight);
+            optionRects[i] = rowRect;
+            bool hover = mouse.HasValue && rowRect.Contains(mouse.Value);
+            if (hover)
+                sb.Draw(pixel, rowRect, DropdownHoverBg);
+            else if (i == selectedIndex)
+                sb.Draw(pixel, rowRect, ControlBg);
+            DrawLabel(sb, device, x + Padding, y + i * RowHeight + 2, options[i], pixel);
+        }
+        cursorY = y + listH;
+        return (dropdownRect, optionRects);
     }
 
     /// <summary>Draw a float row: label + value text. Returns the value field bounds for hit-test / edit.</summary>
@@ -201,23 +238,24 @@ public static class InspectorDrawer
         return valueRect;
     }
 
-    /// <summary>Draw three float fields for Vector3 (X, Y, Z). Each on its own row with small label. Advances cursorY by 3*RowHeight.</summary>
-    public static void DrawVector3Rows(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, Vector3 v, ref int cursorY)
+    /// <summary>Draw three float fields for Vector3 (X, Y, Z). Each on its own row with small label. Advances cursorY by 3*RowHeight. Optional override strings for editing.</summary>
+    public static void DrawVector3Rows(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, Vector3 v, ref int cursorY, string? overrideX = null, string? overrideY = null, string? overrideZ = null)
     {
-        DrawVector3Row(sb, pixel, device, x, y, w, "X", v.X, ref cursorY);
-        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Y", v.Y, ref cursorY);
-        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Z", v.Z, ref cursorY);
+        DrawVector3Row(sb, pixel, device, x, y, w, "X", v.X, ref cursorY, overrideX);
+        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Y", v.Y, ref cursorY, overrideY);
+        DrawVector3Row(sb, pixel, device, x, cursorY, w, "Z", v.Z, ref cursorY, overrideZ);
     }
 
-    private static void DrawVector3Row(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string axis, float value, ref int cursorY)
+    private static void DrawVector3Row(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string axis, float value, ref int cursorY, string? valueOverride = null)
     {
+        string valueText = valueOverride ?? value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
         DrawLabel(sb, device, x + Padding, y + 2, axis, pixel);
         int valueW = Math.Max(60, w / 2);
         var valueRect = new Rectangle(x + w - valueW - Padding, y + 2, valueW, RowHeight - 4);
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
-        DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture), pixel);
+        DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
         cursorY = y + RowHeight;
     }
 }

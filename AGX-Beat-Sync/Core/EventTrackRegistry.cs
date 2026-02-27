@@ -15,7 +15,7 @@ public static class EventTrackRegistry
         s_descriptors.Add(descriptor);
     }
 
-    public static IEventTrack CreateTrack(string trackTypeId)
+    public static EventTrackBase CreateTrack(string trackTypeId)
     {
         var d = s_descriptors.FirstOrDefault(x => x.TrackTypeId == trackTypeId);
         if (d == null)

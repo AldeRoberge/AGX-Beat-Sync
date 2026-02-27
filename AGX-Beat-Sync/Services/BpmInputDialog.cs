@@ -38,9 +38,19 @@ public static class BpmInputDialog
             Width = 75,
             DialogResult = DialogResult.OK
         };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            Left = 92,
+            Top = 40,
+            Width = 75,
+            DialogResult = DialogResult.Cancel
+        };
         form.AcceptButton = ok;
+        form.CancelButton = cancel;
         form.Controls.Add(textBox);
         form.Controls.Add(ok);
+        form.Controls.Add(cancel);
         if (form.ShowDialog() == DialogResult.OK)
             result = textBox.Text;
         return result;

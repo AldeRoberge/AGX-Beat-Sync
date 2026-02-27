@@ -5,6 +5,7 @@ using AGX_Beat_Sync.Core;
 using AGX_Beat_Sync.Services;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
@@ -13,8 +14,10 @@ public class TransportBarPanel : PanelBase
     private const int ButtonWidth = 28;
     private const int BpmAreaWidth = 120;
     private const int TimeAreaWidth = 140;
+    private const int OffsetAreaWidth = 100;
     private const int Padding = 8;
     private const int VolumeSliderWidth = 88;
+    private const int OffsetButtonWidth = 20;
     private const int SliderTrackHeight = 16;
 
     private float _volume = 1f;
@@ -31,6 +34,10 @@ public class TransportBarPanel : PanelBase
     private string _timeCachedString = "";
     private int _timeCachedWidth = -1;
     private int _timeCachedHeight = -1;
+    private Texture2D? _offsetTextTexture;
+    private string _offsetCachedString = "";
+    private int _offsetCachedWidth = -1;
+    private int _offsetCachedHeight = -1;
 
     public Project? Project { get; set; }
     public Transport? Transport { get; set; }
@@ -80,6 +87,10 @@ public class TransportBarPanel : PanelBase
     public Action? BpmEditRequested { get; set; }
     /// <summary>Invoked when user clicks the time area to type a position (HH:mm:ss:frame).</summary>
     public Action? TimeEditRequested { get; set; }
+    /// <summary>When set, called when user changes beat offset. Host should set Project.BeatOffsetSeconds and Transport.BeatOffsetSeconds.</summary>
+    public Action<double>? OffsetChanged { get; set; }
+    /// <summary>When set, called when user clicks offset value to type (e.g. time dialog).</summary>
+    public Action? OffsetEditRequested { get; set; }
 
     private Rectangle GetTimeAreaRect()
     {
@@ -87,6 +98,49 @@ public class TransportBarPanel : PanelBase
         int x = bpm.Right + Padding;
         int y = Bounds.Y + (Bounds.Height - 24) / 2;
         return new Rectangle(x, y, TimeAreaWidth, 24);
+    }
+
+    private Rectangle GetOffsetAreaRect()
+    {
+        var timeArea = GetTimeAreaRect();
+        int x = timeArea.Right + Padding;
+        int y = Bounds.Y + (Bounds.Height - 24) / 2;
+        return new Rectangle(x, y, OffsetAreaWidth, 24);
+    }
+
+    private Rectangle GetOffsetMinusButton()
+    {
+        var area = GetOffsetAreaRect();
+        return new Rectangle(area.X, area.Y, OffsetButtonWidth, area.Height);
+    }
+
+    private Rectangle GetOffsetPlusButton()
+    {
+        var area = GetOffsetAreaRect();
+        return new Rectangle(area.X + area.Width - OffsetButtonWidth, area.Y, OffsetButtonWidth, area.Height);
+    }
+
+    private Rectangle GetOffsetValueRect()
+    {
+        var area = GetOffsetAreaRect();
+        return new Rectangle(area.X + OffsetButtonWidth + 2, area.Y, area.Width - 2 * OffsetButtonWidth - 4, area.Height);
+    }
+
+    public override string? GetHoverText(Point mouse)
+    {
+        if (!ContainsPoint(mouse)) return null;
+        var volTrack = GetVolumeSliderTrack();
+        if (volTrack.Contains(mouse)) return "Volume";
+        var minus = GetBpmMinusButton();
+        if (minus.Contains(mouse)) return "BPM −";
+        var plus = GetBpmPlusButton();
+        if (plus.Contains(mouse)) return "BPM +";
+        if (GetBpmValueRect().Contains(mouse)) return "BPM — click to edit";
+        if (GetTimeAreaRect().Contains(mouse)) return "Time — click to go to position";
+        if (GetOffsetMinusButton().Contains(mouse)) return "Beat offset −";
+        if (GetOffsetPlusButton().Contains(mouse)) return "Beat offset +";
+        if (GetOffsetValueRect().Contains(mouse)) return "Beat offset — click to edit";
+        return "Transport";
     }
 
     public override void Update(GameTime gameTime)
@@ -133,6 +187,26 @@ public class TransportBarPanel : PanelBase
         {
             TimeEditRequested?.Invoke();
         }
+        else if (OffsetChanged != null)
+        {
+            var offsetMinus = GetOffsetMinusButton();
+            var offsetPlus = GetOffsetPlusButton();
+            double offsetStep = Input.IsKeyDown(Keys.LeftShift) || Input.IsKeyDown(Keys.RightShift) ? 0.01 : 0.1;
+            if (offsetMinus.Contains(Input.MousePosition))
+            {
+                double newOffset = Math.Max(0, Project!.BeatOffsetSeconds - offsetStep);
+                OffsetChanged(newOffset);
+            }
+            else if (offsetPlus.Contains(Input.MousePosition))
+            {
+                double newOffset = Project!.BeatOffsetSeconds + offsetStep;
+                OffsetChanged(newOffset);
+            }
+            else if (GetOffsetValueRect().Contains(Input.MousePosition))
+            {
+                OffsetEditRequested?.Invoke();
+            }
+        }
     }
 
     protected override void DrawPanelBackground(SpriteBatch spriteBatch)
@@ -161,17 +235,17 @@ public class TransportBarPanel : PanelBase
         var area = GetBpmArea();
 
         // BPM area background
-        spriteBatch.Draw(pixel, area, new Color(55, 58, 64));
+        spriteBatch.Draw(pixel, area, new Color(38, 41, 46));
         // Minus button
-        spriteBatch.Draw(pixel, minus, new Color(70, 74, 82));
+        spriteBatch.Draw(pixel, minus, new Color(48, 52, 58));
         spriteBatch.Draw(pixel, new Rectangle(minus.Center.X - 5, minus.Center.Y - 1, 10, 2), new Color(200, 202, 208));
         // Plus button
-        spriteBatch.Draw(pixel, plus, new Color(70, 74, 82));
+        spriteBatch.Draw(pixel, plus, new Color(48, 52, 58));
         spriteBatch.Draw(pixel, new Rectangle(plus.Center.X - 5, plus.Center.Y - 1, 10, 2), new Color(200, 202, 208));
         spriteBatch.Draw(pixel, new Rectangle(plus.Center.X - 1, plus.Center.Y - 5, 2, 10), new Color(200, 202, 208));
         // Center label area: draw BPM value as text
         var center = GetBpmValueRect();
-        spriteBatch.Draw(pixel, center, new Color(48, 51, 56));
+        spriteBatch.Draw(pixel, center, new Color(32, 35, 40));
 
         string bpmString = Transport != null ? FormatBpm(Transport.BPM) : "120";
         EnsureBpmTextTexture(spriteBatch.GraphicsDevice, bpmString, center);
@@ -192,6 +266,28 @@ public class TransportBarPanel : PanelBase
             int x = timeArea.X + (timeArea.Width - _timeTextTexture.Width) / 2;
             int y = timeArea.Y + (timeArea.Height - _timeTextTexture.Height) / 2;
             spriteBatch.Draw(_timeTextTexture, new Rectangle(x, y, _timeTextTexture.Width, _timeTextTexture.Height), Color.White);
+        }
+
+        // Offset area (beat offset: minus | value | plus)
+        var offsetArea = GetOffsetAreaRect();
+        spriteBatch.Draw(pixel, offsetArea, new Color(38, 41, 46));
+        var offsetMinus = GetOffsetMinusButton();
+        var offsetPlus = GetOffsetPlusButton();
+        spriteBatch.Draw(pixel, offsetMinus, new Color(48, 52, 58));
+        spriteBatch.Draw(pixel, new Rectangle(offsetMinus.Center.X - 5, offsetMinus.Center.Y - 1, 10, 2), new Color(200, 202, 208));
+        spriteBatch.Draw(pixel, offsetPlus, new Color(48, 52, 58));
+        spriteBatch.Draw(pixel, new Rectangle(offsetPlus.Center.X - 5, offsetPlus.Center.Y - 1, 10, 2), new Color(200, 202, 208));
+        spriteBatch.Draw(pixel, new Rectangle(offsetPlus.Center.X - 1, offsetPlus.Center.Y - 5, 2, 10), new Color(200, 202, 208));
+        var offsetValueRect = GetOffsetValueRect();
+        spriteBatch.Draw(pixel, offsetValueRect, new Color(32, 35, 40));
+        double offsetSec = Project?.BeatOffsetSeconds ?? 0;
+        string offsetStr = offsetSec.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + "s";
+        EnsureOffsetTextTexture(spriteBatch.GraphicsDevice, offsetStr, offsetValueRect);
+        if (_offsetTextTexture != null)
+        {
+            int ox = offsetValueRect.X + (offsetValueRect.Width - _offsetTextTexture.Width) / 2;
+            int oy = offsetValueRect.Y + (offsetValueRect.Height - _offsetTextTexture.Height) / 2;
+            spriteBatch.Draw(_offsetTextTexture, new Rectangle(ox, oy, _offsetTextTexture.Width, _offsetTextTexture.Height), Color.White);
         }
     }
 
@@ -224,6 +320,19 @@ public class TransportBarPanel : PanelBase
         _timeCachedHeight = h;
         _timeTextTexture?.Dispose();
         _timeTextTexture = CreateLabelTextTexture(device, text, w, h);
+    }
+
+    private void EnsureOffsetTextTexture(GraphicsDevice device, string text, Rectangle destRect)
+    {
+        int w = Math.Max(1, destRect.Width);
+        int h = Math.Max(1, destRect.Height);
+        if (_offsetCachedString == text && _offsetCachedWidth == w && _offsetCachedHeight == h && _offsetTextTexture != null && !_offsetTextTexture.IsDisposed)
+            return;
+        _offsetCachedString = text;
+        _offsetCachedWidth = w;
+        _offsetCachedHeight = h;
+        _offsetTextTexture?.Dispose();
+        _offsetTextTexture = CreateLabelTextTexture(device, text, w, h);
     }
 
     private static Texture2D? CreateLabelTextTexture(GraphicsDevice device, string text, int width, int height)

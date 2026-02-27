@@ -9,6 +9,6 @@ public class SavedSessionState
     public int TimeSignatureDenominator { get; set; } = 4;
     public double BeatOffsetSeconds { get; set; }
     public double CurrentTime { get; set; }
-    public List<Core.NoteTrack> NoteTracks { get; set; } = new();
     public List<Core.AutomationTrack> AutomationTracks { get; set; } = new();
+    public List<Core.EventTrackBase> EventTracks { get; set; } = new();
 }

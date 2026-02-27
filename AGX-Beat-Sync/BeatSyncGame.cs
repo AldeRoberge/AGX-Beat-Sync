@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using AGX_Beat_Sync.Audio;
@@ -24,9 +26,12 @@ public class BeatSyncGame : Game
     private SpriteBatch _spriteBatch = null!;
     private PanelLayout _layout = null!;
     private TransportBarPanel _transportBar = null!;
+    private EventTrackListPanel _trackListPanel = null!;
     private TimelinePanel _timelinePanel = null!;
     private InspectorPanel _inspectorPanel = null!;
     private GameViewPanel _gameViewPanel = null!;
+    private StatusBarPanel _statusBarPanel = null!;
+    private OpenDialogPanel _openDialogPanel = null!;
 
     public Project Project { get; }
     public Transport Transport { get; }
@@ -43,14 +48,34 @@ public class BeatSyncGame : Game
     private readonly List<string> _pendingDroppedFiles = new();
     /// <summary>If true, load Project.AudioFilePath on first Update (saved session had a song).</summary>
     private bool _loadSavedAudioOnStart;
-    /// <summary>Clipboard for copy/paste: (time offset from anchor, lane, type).</summary>
-    private readonly List<(double timeOffset, int lane, int type)> _noteClipboard = new();
-
     private readonly AudioLoadCoordinator _audioLoad = new();
+    /// <summary>Fired (trackIndex, eventTime) so we don't double-fire when playback crosses an event time.</summary>
+    private readonly HashSet<(int trackIndex, double eventTime)> _eventFiredSet = new();
+    private double _lastPlaybackTime = -1;
 
     private bool _gameViewResizeDragging;
     private int _gameViewResizeStartY;
     private int _gameViewResizeStartHeight;
+
+    // CPU / Memory metrics (top right of whole view)
+    private const int MetricsMargin = 8;
+    private const int MetricsFontSize = 18;       // render at 18; scale to fit max size (aspect preserved)
+    private const int MetricsMaxWidth = 260;
+    private const int MetricsMaxHeight = 40;
+    private const float MetricsSampleInterval = 0.25f;
+    private const float MetricsAlphaLow = 0.06f;   // more transparent when CPU < 80%
+    private const float MetricsAlphaHigh = 0.5f;   // more transparent when CPU >= 80%
+    private const float MetricsCpuThreshold = 80f;
+    private const long MetricsMemoryThresholdMb = 800;
+    private readonly Process _metricsProcess = Process.GetCurrentProcess();
+    private TimeSpan _metricsLastCpuTime;
+    private double _metricsLastCpuSampleTime = -1;
+    private float _metricsCpuPercent;
+    private long _metricsMemoryMb;
+    private float _metricsSampleAccum;
+    private string _metricsLastString = "";
+    private Texture2D? _metricsTexture;
+    private Texture2D? _playerTexture;
 
     public BeatSyncGame()
     {
@@ -75,28 +100,26 @@ public class BeatSyncGame : Game
             EnsureDefaultTracks();
     }
 
-    private void ClearSelectionIfNoteRemoved()
-    {
-        if (Selection.SelectedNoteTrack == null) return;
-        var track = Selection.SelectedNoteTrack;
-        Selection.SelectedNotes.RemoveAll(n => !track.Notes.Contains(n));
-        if (Selection.SelectedNotes.Count == 0)
-            Selection.Clear();
-        else
-            Selection.SelectedNote = Selection.SelectedNotes[0];
-    }
-
     private void EnsureDefaultTracks()
     {
-        if (Project.NoteTracks.Count == 0)
+        if (Project.EventTracks.Count == 0)
         {
-            var track = new NoteTrack { Name = "Notes" };
-            track.Notes.Add(new NoteEvent { Time = 1.0, Lane = 0, Type = 0 });
-            track.Notes.Add(new NoteEvent { Time = 2.0, Lane = 1, Type = 0 });
-            track.Notes.Add(new NoteEvent { Time = 3.0, Lane = 2, Type = 0 });
-            track.Notes.Add(new NoteEvent { Time = 4.0, Lane = 0, Type = 0 });
-            Project.NoteTracks.Add(track);
+            var track = new SpawnEntityTrack { Order = 0 };
+            track.EventTimes.Add(1.0);
+            track.EventTimes.Add(2.0);
+            track.EventTimes.Add(3.0);
+            track.EventTimes.Add(4.0);
+            Project.EventTracks.Add(track);
         }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    /// <summary>Bring game window to foreground so keyboard shortcuts work (e.g. after a WinForms dialog closed).</summary>
+    private void RestoreWindowFocus()
+    {
+        try { SetForegroundWindow(Window.Handle); } catch { /* ignore */ }
     }
 
     protected override void Initialize()
@@ -108,13 +131,23 @@ public class BeatSyncGame : Game
 
         _layout = new PanelLayout();
         _transportBar = new TransportBarPanel();
+        _trackListPanel = new EventTrackListPanel();
         _timelinePanel = new TimelinePanel();
         _inspectorPanel = new InspectorPanel();
         _gameViewPanel = new GameViewPanel();
+        _statusBarPanel = new StatusBarPanel();
+        _openDialogPanel = new OpenDialogPanel();
+
+        // Register event track types and their inspector renderers
+        EventTrackRegistry.Register(new EventTrackDescriptor("SpawnEntity", "Spawn Entity", () => new SpawnEntityTrack()));
+        InspectorRendererRegistry.Register("SpawnEntity", new SpawnEntityInspectorRenderer());
 
         _audio.PlaybackStopped += () => Transport.Pause();
 
         Window.FileDrop += OnFileDrop;
+        Window.KeyDown += (_, e) => Input.OnKeyDown(e.Key);
+        Window.KeyUp += (_, e) => Input.OnKeyUp(e.Key);
+        Deactivated += (_, _) => Input.ClearKeys();
         Exiting += (_, _) => ProjectPersistence.Save(Project, Transport);
 
         base.Initialize();
@@ -123,6 +156,33 @@ public class BeatSyncGame : Game
     protected override void LoadContent()
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
+        _gameViewPanel.GraphicsDevice = GraphicsDevice;
+        _playerTexture = LoadPlayerTexture();
+        _gameViewPanel.PlayerTexture = _playerTexture;
+    }
+
+    /// <summary>Load player sprite from Content Pipeline (.xnb) or fallback to Content/player.png on disk.</summary>
+    private Texture2D? LoadPlayerTexture()
+    {
+        try
+        {
+            return Content.Load<Texture2D>("player");
+        }
+        catch
+        {
+            // Fallback: load from file if MGCB wasn't run or content missing
+            try
+            {
+                string path = Path.Combine(AppContext.BaseDirectory, "Content", "player.png");
+                if (File.Exists(path))
+                {
+                    using var stream = File.OpenRead(path);
+                    return Texture2D.FromStream(GraphicsDevice, stream);
+                }
+            }
+            catch { /* ignore */ }
+            return null;
+        }
     }
 
     private void OnFileDrop(object? sender, FileDropEventArgs e)
@@ -138,27 +198,72 @@ public class BeatSyncGame : Game
         }
     }
 
-    /// <summary>Shows OpenFileDialog on an STA thread to avoid ThreadStateException / crash.</summary>
-    private void OpenFileDialogOnStaThread()
+    /// <summary>Handles result after the in-game Open dialog is closed.</summary>
+    private void ApplyOpenDialogResult()
     {
-        string? path = null;
-        var t = new Thread(() =>
+        if (_openDialogPanel.SelectedProjectPath != null)
         {
-            try
+            string path = _openDialogPanel.SelectedProjectPath;
+            _openDialogPanel.ClearResult();
+            if (ProjectPersistence.TryLoadFromFile(path, out var saved) && saved != null)
             {
-                path = AudioImportService.PickAudioFile();
+                ProjectPersistence.ApplyState(saved, Project, Transport);
+                EnsureDefaultTracks();
+                _currentProjectPath = path;
+                ProjectPersistence.AddRecentProjectPath(path);
+                if (!string.IsNullOrWhiteSpace(Project.AudioFilePath))
+                    _loadSavedAudioOnStart = true;
             }
-            catch
+            return;
+        }
+        if (_openDialogPanel.BrowseMusicRequested)
+        {
+            _openDialogPanel.ClearResult();
+            string? path = null;
+            var t = new Thread(() => { try { path = AudioImportService.PickAudioFile(); } catch { } });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            RestoreWindowFocus();
+            if (path != null)
+                StartAudioLoad(path, detectBpm: true);
+            return;
+        }
+        if (_openDialogPanel.BrowseProjectRequested)
+        {
+            _openDialogPanel.ClearResult();
+            string? path = null;
+            var thread = new Thread(() =>
             {
-                // Dialog failed; path stays null
+                try
+                {
+                    using var dlg = new OpenFileDialog
+                    {
+                        Title = "Open project",
+                        Filter = "AGX Beat Sync project (*.agxbs)|*.agxbs|All files (*.*)|*.*",
+                        FilterIndex = 1
+                    };
+                    if (dlg.ShowDialog() == DialogResult.OK)
+                        path = dlg.FileName;
+                }
+                catch { }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+            RestoreWindowFocus();
+            if (path != null && ProjectPersistence.TryLoadFromFile(path, out var saved) && saved != null)
+            {
+                ProjectPersistence.ApplyState(saved, Project, Transport);
+                EnsureDefaultTracks();
+                _currentProjectPath = path;
+                ProjectPersistence.AddRecentProjectPath(path);
+                if (!string.IsNullOrWhiteSpace(Project.AudioFilePath))
+                    _loadSavedAudioOnStart = true;
             }
-        });
-        t.SetApartmentState(ApartmentState.STA);
-        t.Start();
-        t.Join();
-        if (path == null) return;
-        // When user imports a new audio file, run BPM auto-detection.
-        StartAudioLoad(path, detectBpm: true);
+            return;
+        }
+        _openDialogPanel.ClearResult();
     }
 
     /// <summary>Shows SaveFileDialog for .agxbs on an STA thread, then saves project to the chosen path and remembers it.</summary>
@@ -201,11 +306,13 @@ public class BeatSyncGame : Game
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         t.Join();
+        RestoreWindowFocus();
         if (string.IsNullOrWhiteSpace(path)) return;
         _currentProjectPath = path;
         try
         {
             ProjectPersistence.SaveToFile(Project, Transport, path);
+            ProjectPersistence.AddRecentProjectPath(path);
         }
         catch
         {
@@ -292,7 +399,7 @@ public class BeatSyncGame : Game
         }
 
         ProcessDroppedFiles();
-        Input.Update();
+        Input.Update(IsActive);
 
         // Global shortcuts
         if (Input.IsKeyPressed(Keys.Space))
@@ -312,67 +419,33 @@ public class BeatSyncGame : Game
                 }
             }
         }
-        if (Input.IsKeyPressed(Keys.Delete) && Selection.SelectedNoteTrack != null && Selection.SelectedNotes.Count > 0)
+        if (Input.IsKeyPressed(Keys.Delete))
         {
-            foreach (var note in Selection.SelectedNotes.ToList())
-                CommandStack.Execute(new DeleteNoteCommand(Selection.SelectedNoteTrack, note));
-            Selection.Clear();
-        }
-        if ((Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl)) && Input.IsKeyPressed(Keys.A))
-        {
-            if (Project.NoteTracks.Count > 0 && Project.NoteTracks[0].Notes.Count > 0)
-                Selection.SetAllNotes(Project.NoteTracks[0]);
-        }
-        bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
-        if (ctrl && Input.IsKeyPressed(Keys.C) && Selection.SelectedNoteTrack != null && Selection.SelectedNotes.Count > 0)
-        {
-            double anchor = Selection.SelectedNotes.Min(n => n.Time);
-            _noteClipboard.Clear();
-            foreach (var n in Selection.SelectedNotes)
-                _noteClipboard.Add((n.Time - anchor, n.Lane, n.Type));
-        }
-        if (ctrl && Input.IsKeyPressed(Keys.X) && Selection.SelectedNoteTrack != null && Selection.SelectedNotes.Count > 0)
-        {
-            double anchor = Selection.SelectedNotes.Min(n => n.Time);
-            _noteClipboard.Clear();
-            foreach (var n in Selection.SelectedNotes)
-                _noteClipboard.Add((n.Time - anchor, n.Lane, n.Type));
-            foreach (var note in Selection.SelectedNotes.ToList())
-                CommandStack.Execute(new DeleteNoteCommand(Selection.SelectedNoteTrack, note));
-            Selection.Clear();
-        }
-        if (ctrl && Input.IsKeyPressed(Keys.V) && _noteClipboard.Count > 0)
-        {
-            var track = Selection.SelectedNoteTrack ?? (Project.NoteTracks.Count > 0 ? Project.NoteTracks[0] : null);
-            if (track != null)
+            if (Selection.SelectedEventTrack is EventTrackBase eb && Project.EventTracks.Contains(eb))
             {
-                double pasteTime = Transport.CurrentTime;
-                var pasted = new List<NoteEvent>();
-                foreach (var (timeOffset, lane, type) in _noteClipboard)
+                if (Selection.SelectedEventTime.HasValue)
                 {
-                    var note = new NoteEvent { Time = pasteTime + timeOffset, Lane = lane, Type = type };
-                    CommandStack.Execute(new AddNoteCommand(track, note));
-                    pasted.Add(note);
+                    double t = Selection.SelectedEventTime.Value;
+                    eb.EventTimes.Remove(t);
+                    eb.EventDurations.Remove(t);
+                    Selection.SelectedEventTime = null;
                 }
-                Selection.SelectedNoteTrack = track;
-                Selection.SelectedNotes = pasted;
-                Selection.SelectedNote = pasted.Count > 0 ? pasted[0] : null;
+                else
+                {
+                    Project.EventTracks.Remove(eb);
+                    Selection.SelectedEventTrack = Project.EventTracks.FirstOrDefault();
+                }
             }
         }
         bool shift = Input.IsKeyDown(Keys.LeftShift) || Input.IsKeyDown(Keys.RightShift);
-        if ((Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl)) && Input.IsKeyPressed(Keys.Z) && !shift)
-        {
+        bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
+        if (ctrl && Input.IsKeyPressed(Keys.Z) && !shift)
             CommandStack.Undo();
-            ClearSelectionIfNoteRemoved();
-        }
-        if ((Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl)) && (Input.IsKeyPressed(Keys.Y) || (shift && Input.IsKeyPressed(Keys.Z))))
-        {
+        if (ctrl && (Input.IsKeyPressed(Keys.Y) || (shift && Input.IsKeyPressed(Keys.Z))))
             CommandStack.Redo();
-            ClearSelectionIfNoteRemoved();
-        }
         if (ctrl && Input.IsKeyPressed(Keys.O))
         {
-            OpenFileDialogOnStaThread();
+            _openDialogPanel.Open();
         }
         if (ctrl && Input.IsKeyPressed(Keys.S))
         {
@@ -403,21 +476,50 @@ public class BeatSyncGame : Game
             TimelineView.GridSubdivisionsPerBeat = Math.Max(TimelineViewState.MinGridSubdivisions, TimelineView.GridSubdivisionsPerBeat / 2);
         }
 
+        // Seek backward: clear fired events and spawned entities so replay is correct
+        if (Transport.CurrentTime < _lastPlaybackTime)
+        {
+            _eventFiredSet.Clear();
+            _gameViewPanel.ClearSpawnedEntities();
+        }
+
         // Drive transport from audio when playing with a loaded file, else game time
+        double prevTime = Transport.CurrentTime;
         if (Transport.IsPlaying)
         {
             if (_audio.LoadedFilePath != null && _audio.IsPlaying)
                 Transport.CurrentTime = _audio.CurrentTimeSeconds;
             else if (_audio.LoadedFilePath == null)
                 Transport.CurrentTime += gameTime.ElapsedGameTime.TotalSeconds;
-            // Smooth playhead for display (NAudio reports position in steps; lerp removes jitter)
             const double playheadSmooth = 0.35;
             _playheadDisplayTime += (Transport.CurrentTime - _playheadDisplayTime) * playheadSmooth;
         }
         else
-        {
             _playheadDisplayTime = Transport.CurrentTime;
+
+        // Fire event tracks when playback crosses an event time
+        if (Transport.IsPlaying && Transport.CurrentTime >= 0)
+        {
+            for (int ti = 0; ti < Project.EventTracks.Count; ti++)
+            {
+                var track = Project.EventTracks[ti];
+                foreach (var eventTime in track.EventTimes)
+                {
+                    if (eventTime > prevTime && eventTime <= Transport.CurrentTime && _eventFiredSet.Add((ti, eventTime)))
+                    {
+                        if (track is SpawnEntityTrack spawnTrack)
+                        {
+                            var pos = spawnTrack.PositionMode == PositionMode.Origin ? new Vector3(0, 1, 0)
+                                : spawnTrack.PositionMode == PositionMode.Absolute ? spawnTrack.PositionAbsolute
+                                : spawnTrack.PositionRelative;
+                            var rot = spawnTrack.RotationMode == RotationMode.Absolute ? spawnTrack.RotationEuler : Vector3.Zero;
+                            _gameViewPanel.SpawnEntity(pos, rot, spawnTrack.Speed);
+                        }
+                    }
+                }
+            }
         }
+        _lastPlaybackTime = Transport.CurrentTime;
 
         // Sync back buffer to window size when user resizes
         var bounds = Window.ClientBounds;
@@ -433,14 +535,27 @@ public class BeatSyncGame : Game
         if (_gameViewResizeDragging)
         {
             int minH = PanelLayout.MinGameViewHeight;
-            int maxH = Math.Max(minH, _graphics.PreferredBackBufferHeight - PanelLayout.TransportHeight - PanelLayout.MinTimelineHeight);
-            int newH = _gameViewResizeStartHeight + (Input.MousePosition.Y - _gameViewResizeStartY);
+            int maxH = Math.Max(minH, _graphics.PreferredBackBufferHeight - PanelLayout.TransportHeight - PanelLayout.MinTimelineHeight - PanelLayout.StatusBarHeight);
+            int newH = _gameViewResizeStartHeight + (_gameViewResizeStartY - Input.MousePosition.Y);
             _layout.GameViewHeightPx = Math.Clamp(newH, minH, maxH);
             if (Input.MouseLeftReleased)
                 _gameViewResizeDragging = false;
         }
 
         _layout.Update(_graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+
+        _openDialogPanel.GraphicsDevice = GraphicsDevice;
+        _openDialogPanel.Input = Input;
+        if (_openDialogPanel.IsVisible)
+        {
+            _openDialogPanel.Update(gameTime, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+            if (!_openDialogPanel.IsVisible)
+                ApplyOpenDialogResult();
+            Window.Title = $"AGX Beat Sync — BPM: {Transport.BPM:F0} | {TimeFormatHelper.Format(_playheadDisplayTime)}";
+            UpdateMetrics(gameTime);
+            base.Update(gameTime);
+            return;
+        }
 
         if (!_gameViewResizeDragging && Input.MouseLeftPressed && _layout.DividerGrip.Contains(Input.MousePosition))
         {
@@ -449,6 +564,10 @@ public class BeatSyncGame : Game
             _gameViewResizeStartHeight = _layout.GameViewHeightPx;
         }
         _transportBar.Bounds = _layout.TransportBar;
+        _trackListPanel.Bounds = _layout.TrackList;
+        _trackListPanel.Project = Project;
+        _trackListPanel.Selection = Selection;
+        _trackListPanel.Input = Input;
         _transportBar.Project = Project;
         _transportBar.Transport = Transport;
         _transportBar.Input = Input;
@@ -462,6 +581,7 @@ public class BeatSyncGame : Game
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
             t.Join();
+            RestoreWindowFocus();
             if (result != null && double.TryParse(result.Trim(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double bpm) && bpm >= 20 && bpm <= 999)
             {
                 Transport.BPM = bpm;
@@ -478,6 +598,7 @@ public class BeatSyncGame : Game
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             thread.Join();
+            RestoreWindowFocus();
             if (result.HasValue && result.Value >= 0)
             {
                 Transport.Seek(result.Value);
@@ -486,7 +607,30 @@ public class BeatSyncGame : Game
                     _audio.Seek(result.Value);
             }
         };
+        _transportBar.OffsetChanged = (offset) =>
+        {
+            Project.BeatOffsetSeconds = offset;
+            Transport.BeatOffsetSeconds = offset;
+        };
+        _transportBar.OffsetEditRequested = () =>
+        {
+            double? result = null;
+            var thread = new Thread(() => result = TimeInputDialog.Show(Project.BeatOffsetSeconds, TimeFormatHelper.DefaultFramesPerSecond, "Enter offset"))
+            {
+                IsBackground = true
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+            RestoreWindowFocus();
+            if (result.HasValue && result.Value >= 0)
+            {
+                Project.BeatOffsetSeconds = result.Value;
+                Transport.BeatOffsetSeconds = result.Value;
+            }
+        };
         _timelinePanel.Bounds = _layout.Timeline;
+        _timelinePanel.IgnoreClickRect = _layout.DividerGrip;
 
         Window.Title = $"AGX Beat Sync — BPM: {Transport.BPM:F0} | {TimeFormatHelper.Format(_playheadDisplayTime)}";
         _inspectorPanel.Bounds = _layout.Inspector;
@@ -511,47 +655,84 @@ public class BeatSyncGame : Game
             if (_audio.LoadedFilePath != null)
                 _audio.Seek(t);
         };
-        _timelinePanel.OffsetChanged = (offset) =>
-        {
-            Project.BeatOffsetSeconds = offset;
-            Transport.BeatOffsetSeconds = offset;
-        };
-        _timelinePanel.OffsetEditRequested = () =>
-        {
-            double? result = null;
-            var thread = new Thread(() => result = TimeInputDialog.Show(Project.BeatOffsetSeconds))
-            {
-                IsBackground = true
-            };
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-            if (result.HasValue && result.Value >= 0)
-            {
-                Project.BeatOffsetSeconds = result.Value;
-                Transport.BeatOffsetSeconds = result.Value;
-            }
-        };
         _inspectorPanel.Selection = Selection;
+        _inspectorPanel.Input = Input;
+
+        _statusBarPanel.Bounds = _layout.StatusBar;
+        string? hoverText = null;
+        MouseCursor? desiredCursor = null;
+        if (_layout.DividerGrip.Contains(Input.MousePosition))
+            hoverText = "Drag to resize timeline / game view";
+        else if (_transportBar.ContainsPoint(Input.MousePosition))
+            hoverText = _transportBar.GetHoverText(Input.MousePosition);
+        else if (_trackListPanel.ContainsPoint(Input.MousePosition))
+            hoverText = _trackListPanel.GetHoverText(Input.MousePosition);
+        else if (_timelinePanel.ContainsPoint(Input.MousePosition))
+        {
+            hoverText = _timelinePanel.GetHoverText(Input.MousePosition);
+            desiredCursor = _timelinePanel.GetDesiredCursor(Input.MousePosition);
+        }
+        else if (_inspectorPanel.ContainsPoint(Input.MousePosition))
+            hoverText = _inspectorPanel.GetHoverText(Input.MousePosition);
+        else if (_gameViewPanel.ContainsPoint(Input.MousePosition))
+            hoverText = _gameViewPanel.GetHoverText(Input.MousePosition);
+        _statusBarPanel.HoverText = hoverText ?? "";
+        try { Mouse.SetCursor(desiredCursor ?? MouseCursor.Arrow); } catch { /* ignore on some platforms */ }
 
         _transportBar.Update(gameTime);
         _audio.Volume = _transportBar.Volume;
+        _trackListPanel.Update(gameTime);
         _timelinePanel.Update(gameTime);
         _inspectorPanel.Update(gameTime);
         _gameViewPanel.Update(gameTime);
+        IsMouseVisible = !_gameViewPanel.IsCapturingMouse;
 
+        UpdateMetrics(gameTime);
         base.Update(gameTime);
+    }
+
+    private void UpdateMetrics(GameTime gameTime)
+    {
+        _metricsSampleAccum += (float)gameTime.ElapsedGameTime.TotalSeconds;
+        if (_metricsSampleAccum < MetricsSampleInterval)
+            return;
+        _metricsSampleAccum = 0;
+
+        try { _metricsProcess.Refresh(); } catch { /* ignore */ }
+        double totalSeconds = gameTime.TotalGameTime.TotalSeconds;
+        TimeSpan cpuTime = _metricsProcess.TotalProcessorTime;
+
+        if (_metricsLastCpuSampleTime >= 0)
+        {
+            double wallDelta = totalSeconds - _metricsLastCpuSampleTime;
+            if (wallDelta > 0.01)
+            {
+                double cpuDelta = (cpuTime - _metricsLastCpuTime).TotalSeconds;
+                _metricsCpuPercent = (float)((cpuDelta / wallDelta) * 100);
+                if (_metricsCpuPercent > 99.9f) _metricsCpuPercent = 99.9f;
+            }
+        }
+        _metricsLastCpuTime = cpuTime;
+        _metricsLastCpuSampleTime = totalSeconds;
+        _metricsMemoryMb = _metricsProcess.WorkingSet64 / (1024 * 1024);
     }
 
     protected override void Draw(GameTime gameTime)
     {
-        GraphicsDevice.Clear(new Color(28, 30, 34));
+        var gd = GraphicsDevice;
+        // Ensure full back buffer viewport so mid-frame RT switches (inspector, game view) don't leave it small next frame
+        gd.Viewport = new Viewport(0, 0, gd.PresentationParameters.BackBufferWidth, gd.PresentationParameters.BackBufferHeight);
+        gd.ScissorRectangle = gd.Viewport.Bounds;
+        gd.Clear(new Color(28, 30, 34));
 
-        _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend);
+        // CullNone so that when InspectorPanel flushes the batch mid-frame (End/Begin for scissor), the flush doesn't cull 2D sprites and turn the timeline black
+        _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
 
-        _transportBar.Draw(_spriteBatch);
-        _timelinePanel.Draw(_spriteBatch);
+        // Draw inspector first so its mid-frame End/RT/Begin only flushes inspector bg+header; transport, track list, timeline go in the batch after restore so they stay visible
         _inspectorPanel.Draw(_spriteBatch);
+        _transportBar.Draw(_spriteBatch);
+        _trackListPanel.Draw(_spriteBatch);
+        _timelinePanel.Draw(_spriteBatch);
 
         if (_audioLoad.IsLoading)
         {
@@ -559,11 +740,56 @@ public class BeatSyncGame : Game
             LoadingOverlay.Draw(_spriteBatch, pixel, GraphicsDevice, _audioLoad.Progress, gameTime);
         }
 
+        _gameViewPanel.Draw3DScene();
         _gameViewPanel.Draw(_spriteBatch);
+
+        var grip = _layout.DividerGrip;
+        var gripPixel = PanelBase.GetPixelTexture(GraphicsDevice);
+        _spriteBatch.Draw(gripPixel, grip, new Color(70, 75, 85));
+        _spriteBatch.Draw(gripPixel, new Rectangle(grip.X, grip.Y + grip.Height / 2 - 1, grip.Width, 2), new Color(110, 118, 132));
+
+        DrawMetricsOverlay(gameTime);
+        _statusBarPanel.Draw(_spriteBatch);
+
+        if (_openDialogPanel.IsVisible)
+            _openDialogPanel.Draw(_spriteBatch);
 
         _spriteBatch.End();
 
         base.Draw(gameTime);
+    }
+
+    private void DrawMetricsOverlay(GameTime gameTime)
+    {
+        int viewW = GraphicsDevice.Viewport.Width;
+        string s = $"CPU: {_metricsCpuPercent:F1}%  Mem: {_metricsMemoryMb} MB";
+        if (s != _metricsLastString)
+        {
+            _metricsTexture?.Dispose();
+            _metricsTexture = TextTextureHelper.Create(GraphicsDevice, s, "Segoe UI", MetricsFontSize);
+            _metricsLastString = s;
+        }
+        if (_metricsTexture == null)
+            return;
+        int tw = _metricsTexture.Width;
+        int th = _metricsTexture.Height;
+        float scale = Math.Min((float)MetricsMaxWidth / tw, (float)MetricsMaxHeight / th);
+        scale = Math.Min(scale, 1f); // never scale up
+        int w = (int)(tw * scale);
+        int h = (int)(th * scale);
+        int x = viewW - MetricsMargin - w;
+        int y = MetricsMargin;
+        var dest = new Rectangle(x, y, w, h);
+        var src = new Rectangle(0, 0, tw, th);
+        bool problematic = _metricsCpuPercent >= MetricsCpuThreshold || _metricsMemoryMb >= MetricsMemoryThresholdMb;
+        byte alpha = (byte)((problematic ? MetricsAlphaHigh : MetricsAlphaLow) * 255);
+        byte gray = (byte)(problematic ? 255 : 130);   // grayed out when not problematic
+        var tint = new Color(gray, gray, gray, alpha);
+        var bgAlpha = (byte)((problematic ? 0.35f : 0.04f) * 255);
+        var bg = new Rectangle(x - 3, y - 1, w + 6, h + 2);
+        var pixel = PanelBase.GetPixelTexture(GraphicsDevice);
+        _spriteBatch.Draw(pixel, bg, new Color((byte)0, (byte)0, (byte)0, bgAlpha));
+        _spriteBatch.Draw(_metricsTexture, dest, src, tint);
     }
 
     protected override void UnloadContent()

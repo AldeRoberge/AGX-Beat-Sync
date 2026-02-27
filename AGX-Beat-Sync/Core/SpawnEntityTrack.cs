@@ -2,11 +2,14 @@ using Microsoft.Xna.Framework;
 
 namespace AGX_Beat_Sync.Core;
 
-public class SpawnEntityTrack : IEventTrack
+public class SpawnEntityTrack : EventTrackBase
 {
-    public string TrackTypeId => "SpawnEntity";
-    public string DisplayName { get; set; } = "Spawn Entity";
-    public int Order { get; set; }
+    public override string TrackTypeId => "SpawnEntity";
+
+    public SpawnEntityTrack()
+    {
+        DisplayName = "Spawn Entity";
+    }
 
     public PositionMode PositionMode { get; set; }
     public Vector3 PositionAbsolute { get; set; }

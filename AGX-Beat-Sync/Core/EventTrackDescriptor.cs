@@ -7,9 +7,9 @@ public class EventTrackDescriptor
 {
     public string TrackTypeId { get; }
     public string DisplayName { get; }
-    public Func<IEventTrack> Factory { get; }
+    public Func<EventTrackBase> Factory { get; }
 
-    public EventTrackDescriptor(string trackTypeId, string displayName, Func<IEventTrack> factory)
+    public EventTrackDescriptor(string trackTypeId, string displayName, Func<EventTrackBase> factory)
     {
         TrackTypeId = trackTypeId;
         DisplayName = displayName;
