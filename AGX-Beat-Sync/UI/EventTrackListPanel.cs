@@ -1,26 +1,50 @@
+using System.Linq;
 using AGX_Beat_Sync.Core;
 using AGX_Beat_Sync.Editor;
 using AGX_Beat_Sync.Input;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
 /// <summary>
-/// Left panel: vertical list of event tracks. Click to select; drag to reorder; remove via button or Delete key. Create new track at bottom.
+/// Left panel: vertical list of event tracks. Click to select; Ctrl+click to toggle; Shift+click to range-select; drag to reorder; remove via button or Delete key. Create new track at bottom.
 /// </summary>
 public class EventTrackListPanel : PanelBase
 {
     private const int TrackRowHeight = 26;
     private const int DropdownWidth = 130;
+    /// <summary>Space reserved on the right of the dropdown for the arrow so text doesn't overlap.</summary>
+    private const int DropdownArrowWidth = 20;
+    private const int DropdownTextLeft = 6;
+    private const int DropdownTextRightGap = 4;
     private const int AddButtonWidth = 36;
     private const int RemoveButtonWidth = 22;
     private const int Padding = 8;
     /// <summary>Right padding so the delete buttons don't sit flush against the piano roll. Filled with panel background.</summary>
     private const int RightPaddingPx = 8;
     private const int DragThresholdPx = 4;
+    /// <summary>Grab handle: two horizontal lines on the left of each track row.</summary>
+    private const int GrabHandleLeft = 4;
+    private const int GrabHandleLineWidth = 8;
+    private const int GrabHandleLineHeight = 1;
+    private const int GrabHandleLineGap = 2;
+    private static readonly Color GrabHandleColor = new(110, 115, 125);
 
-    public override Rectangle ContentBounds => new(Bounds.X, Bounds.Y + HeaderHeight, Bounds.Width - RightPaddingPx, Bounds.Height - HeaderHeight);
+    private const int ScrollbarWidth = 10;
+    private const int MinScrollbarThumbHeight = 20;
+
+    /// <summary>Content Y aligned with timeline track area (HeaderHeight + in/out + playhead strips = 48).</summary>
+    private const int TrackListContentTopOffset = 48;
+
+    public override Rectangle ContentBounds =>
+        new(Bounds.X, Bounds.Y + TrackListContentTopOffset, Bounds.Width - RightPaddingPx, Math.Max(0, Bounds.Height - TrackListContentTopOffset));
+
+    private int _scrollY;
+    private bool _scrollbarThumbDragging;
+    private int _scrollStartY;
+    private int _scrollThumbDragStartY;
 
     private bool _addDropdownOpen;
     private string _selectedTypeIdForAdd = "";
@@ -33,6 +57,8 @@ public class EventTrackListPanel : PanelBase
     public Project? Project { get; set; }
     public EditorSelection? Selection { get; set; }
     public InputManager? Input { get; set; }
+    /// <summary>When user clicks the remove track button; game should show confirmation then remove if confirmed.</summary>
+    public Action<EventTrackBase>? OnDeleteTrackRequested { get; set; }
 
     public EventTrackListPanel()
     {
@@ -40,33 +66,70 @@ public class EventTrackListPanel : PanelBase
         BackgroundColor = new Color(32, 34, 38);
     }
 
+    private Rectangle GetListArea()
+    {
+        var content = ContentBounds;
+        int contentHeight = GetContentHeight();
+        if (contentHeight <= content.Height)
+            return content;
+        return new Rectangle(content.X, content.Y, Math.Max(0, content.Width - ScrollbarWidth), content.Height);
+    }
+
+    private int GetContentHeight()
+    {
+        if (Project == null) return TrackRowHeight;
+        return Project.EventTracks.Count * TrackRowHeight + TrackRowHeight; // tracks + add row
+    }
+
     private int GetAddRowY()
     {
         if (Project == null) return ContentBounds.Y;
-        return ContentBounds.Y + Project.EventTracks.Count * TrackRowHeight;
+        return ContentBounds.Y + Project.EventTracks.Count * TrackRowHeight - _scrollY;
+    }
+
+    private static Rectangle GetScrollbarBounds(Rectangle content) =>
+        new(content.Right - ScrollbarWidth, content.Y, ScrollbarWidth, content.Height);
+
+    private Rectangle GetThumbBounds(Rectangle content, int maxScroll)
+    {
+        var scrollbar = GetScrollbarBounds(content);
+        int _contentHeight = GetContentHeight();
+        if (_contentHeight <= 0 || _contentHeight <= content.Height)
+            return new Rectangle(scrollbar.X, scrollbar.Y, scrollbar.Width, Math.Min(scrollbar.Height, MinScrollbarThumbHeight));
+        int thumbHeight = Math.Max(MinScrollbarThumbHeight, (int)(content.Height / (double)_contentHeight * scrollbar.Height));
+        int travel = scrollbar.Height - thumbHeight;
+        int thumbY = travel > 0 && maxScroll > 0
+            ? scrollbar.Y + (int)(_scrollY / (double)maxScroll * travel)
+            : scrollbar.Y;
+        return new Rectangle(scrollbar.X, thumbY, scrollbar.Width, thumbHeight);
     }
 
     public override string? GetHoverText(Point mouse)
     {
         if (Project == null || !ContentBounds.Contains(mouse)) return null;
-        var content = ContentBounds;
-        int y = content.Y;
-        foreach (var track in Project.EventTracks)
+        var listArea = GetListArea();
+        if (listArea.Contains(mouse))
         {
-            var rowRect = new Rectangle(content.X, y, content.Width, TrackRowHeight);
-            if (rowRect.Contains(mouse))
+            int virtualY = mouse.Y - listArea.Y + _scrollY;
+            int rowIndex = virtualY / TrackRowHeight;
+            var tracks = Project.EventTracks;
+            if (rowIndex >= 0 && rowIndex < tracks.Count)
             {
-                var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
+                var track = tracks[rowIndex];
+                int trackScreenY = listArea.Y + rowIndex * TrackRowHeight - _scrollY;
+                var rowRect = new Rectangle(listArea.X, trackScreenY, listArea.Width, TrackRowHeight);
+                var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, trackScreenY + 2, RemoveButtonWidth, TrackRowHeight - 4);
                 if (removeRect.Contains(mouse)) return $"Remove track: {track.DisplayName}";
                 return $"Track: {track.DisplayName} (drag to reorder)";
             }
-            y += TrackRowHeight;
+            var addRowY = GetAddRowY();
+            var dropdownRect = new Rectangle(listArea.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
+            if (dropdownRect.Contains(mouse)) return "Track type for new track";
+            var addRect = new Rectangle(listArea.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
+            if (addRect.Contains(mouse)) return "Add track";
         }
-        var addRowY = GetAddRowY();
-        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
-        if (dropdownRect.Contains(mouse)) return "Track type for new track";
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
-        if (addRect.Contains(mouse)) return "Add track";
+        if (GetContentHeight() > listArea.Height && GetScrollbarBounds(ContentBounds).Contains(mouse))
+            return "Scroll tracks";
         return "Tracks";
     }
 
@@ -76,12 +139,44 @@ public class EventTrackListPanel : PanelBase
             return;
 
         var content = ContentBounds;
+        var listArea = GetListArea();
         var tracks = Project.EventTracks;
+        int _contentHeight = GetContentHeight();
+        int maxScroll = Math.Max(0, _contentHeight - listArea.Height);
+
+        // Clamp scroll to valid range
+        _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
 
         if (string.IsNullOrEmpty(_selectedTypeIdForAdd) && EventTrackRegistry.AllTypes.Count > 0)
             _selectedTypeIdForAdd = EventTrackRegistry.AllTypes[0].TrackTypeId;
 
         int addRowY = GetAddRowY();
+
+        // Scrollbar thumb drag
+        if (_scrollbarThumbDragging)
+        {
+            if (Input.MouseLeftDown)
+            {
+                var scrollbar = GetScrollbarBounds(content);
+                var thumb = GetThumbBounds(content, maxScroll);
+                int travel = scrollbar.Height - thumb.Height;
+                if (travel > 0 && maxScroll > 0)
+                {
+                    int deltaY = Input.MousePosition.Y - _scrollThumbDragStartY;
+                    int scrollDelta = (int)(deltaY / (double)travel * maxScroll);
+                    _scrollY = Math.Clamp(_scrollStartY + scrollDelta, 0, maxScroll);
+                }
+            }
+            else
+                _scrollbarThumbDragging = false;
+        }
+
+        // Mouse wheel scroll over list area
+        if (Input.ScrollWheelDelta != 0 && listArea.Contains(Input.MousePosition))
+        {
+            _scrollY -= Input.ScrollWheelDelta;
+            _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
+        }
 
         // Mouse released: commit drag reorder
         if (Input.MouseLeftReleased)
@@ -105,11 +200,11 @@ public class EventTrackListPanel : PanelBase
             _dropTargetIndex = null;
         }
 
-        // Update drop target while dragging
+        // Update drop target while dragging (use virtual Y)
         if (_draggingTrackIndex.HasValue && content.Contains(Input.MousePosition))
         {
-            int mouseY = Input.MousePosition.Y - content.Y;
-            int idx = mouseY / TrackRowHeight;
+            int virtualY = Input.MousePosition.Y - listArea.Y + _scrollY;
+            int idx = virtualY / TrackRowHeight;
             if (idx < 0) idx = 0;
             if (idx >= tracks.Count) idx = tracks.Count - 1;
             _dropTargetIndex = idx;
@@ -130,15 +225,41 @@ public class EventTrackListPanel : PanelBase
         if (!Input.MouseLeftPressed)
             return;
 
-        if (!content.Contains(Input.MousePosition))
+        // Scrollbar click (jump or start thumb drag)
+        if (_contentHeight > listArea.Height && content.Width > ScrollbarWidth)
+        {
+                var scrollbar = GetScrollbarBounds(content);
+                if (scrollbar.Contains(Input.MousePosition))
+                {
+                    var thumb = GetThumbBounds(content, maxScroll);
+                    if (thumb.Contains(Input.MousePosition))
+                    {
+                        _scrollbarThumbDragging = true;
+                        _scrollThumbDragStartY = Input.MousePosition.Y;
+                        _scrollStartY = _scrollY;
+                    }
+                    else
+                {
+                    int jumpY = Input.MousePosition.Y - scrollbar.Y - thumb.Height / 2;
+                    int travel = scrollbar.Height - thumb.Height;
+                    if (travel > 0 && maxScroll > 0)
+                        _scrollY = Math.Clamp((int)(jumpY / (double)travel * maxScroll), 0, maxScroll);
+                }
+                return;
+            }
+        }
+
+        if (!listArea.Contains(Input.MousePosition))
         {
             _addDropdownOpen = false;
             return;
         }
 
+        int virtualMouseY = Input.MousePosition.Y - listArea.Y + _scrollY;
+
         // Add row: dropdown + Add button (at bottom)
-        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
+        var dropdownRect = new Rectangle(listArea.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
+        var addRect = new Rectangle(listArea.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
         if (dropdownRect.Contains(Input.MousePosition))
         {
             _addDropdownOpen = !_addDropdownOpen;
@@ -163,11 +284,11 @@ public class EventTrackListPanel : PanelBase
         if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
             int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
-            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > listArea.Bottom;
             int listY = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
             foreach (var desc in EventTrackRegistry.AllTypes)
             {
-                var rowRect = new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, TrackRowHeight);
+                var rowRect = new Rectangle(listArea.X + Padding, listY, listArea.Width - Padding * 2, TrackRowHeight);
                 if (rowRect.Contains(Input.MousePosition))
                 {
                     _selectedTypeIdForAdd = desc.TrackTypeId;
@@ -178,22 +299,18 @@ public class EventTrackListPanel : PanelBase
             }
         }
 
-        // Track rows
-        int trackY = content.Y;
-        for (int i = 0; i < tracks.Count; i++)
+        // Track rows (use virtual Y to get row index)
+        int rowIndex = virtualMouseY / TrackRowHeight;
+        if (rowIndex >= 0 && rowIndex < tracks.Count)
         {
-            var track = tracks[i];
-            var rowRect = new Rectangle(content.X, trackY, content.Width, TrackRowHeight);
-            var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, trackY + 2, RemoveButtonWidth, TrackRowHeight - 4);
+            var track = tracks[rowIndex];
+            int trackScreenY = listArea.Y + rowIndex * TrackRowHeight - _scrollY;
+            var rowRect = new Rectangle(listArea.X, trackScreenY, listArea.Width, TrackRowHeight);
+            var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, trackScreenY + 2, RemoveButtonWidth, TrackRowHeight - 4);
 
             if (removeRect.Contains(Input.MousePosition))
             {
-                tracks.Remove(track);
-                if (Selection.SelectedEventTrack == track)
-                {
-                    Selection.SelectedEventTrack = tracks.FirstOrDefault();
-                    Selection.SelectedEventTime = null;
-                }
+                OnDeleteTrackRequested?.Invoke(track);
                 _addDropdownOpen = false;
                 return;
             }
@@ -202,25 +319,40 @@ public class EventTrackListPanel : PanelBase
             {
                 if (_draggingTrackIndex.HasValue)
                     return;
+                bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
+                bool shift = Input.IsKeyDown(Keys.LeftShift) || Input.IsKeyDown(Keys.RightShift);
+                if (ctrl)
+                {
+                    Selection.ToggleTrackSelection(track);
+                    Selection.SelectedEventTime = null;
+                }
+                else if (shift)
+                {
+                    int primaryIndex = Selection.SelectedEventTrack != null ? tracks.FindIndex(t => ReferenceEquals(t, Selection.SelectedEventTrack)) : -1;
+                    int from = primaryIndex >= 0 ? primaryIndex : rowIndex;
+                    Selection.SelectTrackRange(from, rowIndex, tracks.Cast<IEventTrack>().ToList());
+                    Selection.SelectedEventTime = null;
+                }
+                else
+                {
+                    Selection.SelectedEventTrack = track;
+                    Selection.SelectedEventTime = null;
+                }
                 if (!_potentialDragIndex.HasValue)
                 {
-                    _potentialDragIndex = i;
+                    _potentialDragIndex = rowIndex;
                     _dragStartPos = Input.MousePosition;
                 }
-                Selection.SelectedEventTrack = track;
-                Selection.SelectedEventTime = null;
                 _addDropdownOpen = false;
                 return;
             }
-
-            trackY += TrackRowHeight;
         }
 
         // Close dropdown when clicking below/above the list (depending on open direction)
         if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
             int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
-            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > listArea.Bottom;
             int listTop = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
             int listBottom = listTop + dropdownHeight;
             if (Input.MousePosition.Y < listTop || Input.MousePosition.Y > listBottom)
@@ -235,68 +367,99 @@ public class EventTrackListPanel : PanelBase
 
         var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
         var content = ContentBounds;
+        var listArea = GetListArea();
         var device = spriteBatch.GraphicsDevice;
         var tracks = Project.EventTracks;
-        int y = content.Y;
 
-        for (int index = 0; index < tracks.Count; index++)
+        int firstVisible = (int)Math.Floor(_scrollY / (double)TrackRowHeight);
+        int lastVisible = (int)Math.Floor((_scrollY + listArea.Height - 1) / (double)TrackRowHeight);
+
+        for (int index = firstVisible; index <= lastVisible && index < tracks.Count; index++)
         {
             var track = tracks[index];
             bool isDragging = _draggingTrackIndex == index;
-            bool isDropTarget = _dropTargetIndex == index;
-
-            if (isDropTarget && _draggingTrackIndex.HasValue)
-            {
-                var indicatorRect = new Rectangle(content.X, y, content.Width, 2);
-                spriteBatch.Draw(pixel, indicatorRect, new Color(100, 150, 220));
-            }
+            int y = listArea.Y + index * TrackRowHeight - _scrollY;
 
             if (!isDragging)
             {
-                bool selected = Selection?.SelectedEventTrack == track;
-                var rowRect = new Rectangle(content.X, y, content.Width, TrackRowHeight);
+                bool selected = Selection != null && Selection.IsTrackSelected(track);
+                var rowRect = new Rectangle(listArea.X, y, listArea.Width, TrackRowHeight);
                 var rowBg = selected ? new Color(62, 68, 78) : (index % 2 == 0 ? new Color(38, 40, 44) : new Color(35, 37, 41));
                 spriteBatch.Draw(pixel, rowRect, rowBg);
 
-                InspectorDrawer.DrawLabel(spriteBatch, device, content.X + Padding + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
+                // Grab handle (two horizontal lines) to show row is draggable
+                int line1Y = y + (TrackRowHeight - GrabHandleLineGap - GrabHandleLineHeight * 2) / 2;
+                int line2Y = line1Y + GrabHandleLineHeight + GrabHandleLineGap;
+                spriteBatch.Draw(pixel, new Rectangle(listArea.X + GrabHandleLeft, line1Y, GrabHandleLineWidth, GrabHandleLineHeight), GrabHandleColor);
+                spriteBatch.Draw(pixel, new Rectangle(listArea.X + GrabHandleLeft, line2Y, GrabHandleLineWidth, GrabHandleLineHeight), GrabHandleColor);
+
+                InspectorDrawer.DrawLabel(spriteBatch, device, listArea.X + GrabHandleLeft + GrabHandleLineWidth + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
 
                 var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
-                spriteBatch.Draw(pixel, removeRect, new Color(80, 50, 50));
                 InspectorDrawer.DrawLabel(spriteBatch, device, removeRect.X + 6, removeRect.Y + 2, "×", pixel);
             }
-
-            y += TrackRowHeight;
         }
 
-        // Create new track row at bottom
+        // Drop indicator on top so it's visible while dragging
+        if (_draggingTrackIndex.HasValue && _dropTargetIndex.HasValue)
+        {
+            int indicatorY = listArea.Y + _dropTargetIndex.Value * TrackRowHeight - _scrollY;
+            var indicatorRect = new Rectangle(listArea.X, indicatorY, listArea.Width, 2);
+            spriteBatch.Draw(pixel, indicatorRect, new Color(100, 150, 220));
+        }
+
+        // Create new track row at bottom (only if visible)
         int addRowY = GetAddRowY();
-        spriteBatch.Draw(pixel, new Rectangle(content.X, addRowY, content.Width, TrackRowHeight), new Color(45, 48, 54));
-        var dropdownRect = new Rectangle(content.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
-        spriteBatch.Draw(pixel, dropdownRect, new Color(58, 62, 70));
-        spriteBatch.Draw(pixel, new Rectangle(dropdownRect.X - 1, dropdownRect.Y - 1, dropdownRect.Width + 2, dropdownRect.Height + 2), new Color(70, 74, 82));
-        var desc = EventTrackRegistry.AllTypes.FirstOrDefault(d => d.TrackTypeId == _selectedTypeIdForAdd);
-        string dropdownText = desc?.DisplayName ?? _selectedTypeIdForAdd;
-        InspectorDrawer.DrawLabel(spriteBatch, device, dropdownRect.X + 6, dropdownRect.Y + 4, dropdownText.Length > 14 ? dropdownText[..14] + "…" : dropdownText, pixel);
-        var addRect = new Rectangle(content.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
-        spriteBatch.Draw(pixel, addRect, new Color(70, 100, 130));
-        InspectorDrawer.DrawLabel(spriteBatch, device, addRect.X + 10, addRect.Y + 2, "+", pixel);
-        y = addRowY + TrackRowHeight;
+        if (addRowY + TrackRowHeight > listArea.Y && addRowY < listArea.Bottom)
+        {
+            spriteBatch.Draw(pixel, new Rectangle(listArea.X, addRowY, listArea.Width, TrackRowHeight), new Color(45, 48, 54));
+            var dropdownRect = new Rectangle(listArea.X + Padding, addRowY + 4, DropdownWidth, TrackRowHeight - 8);
+            spriteBatch.Draw(pixel, dropdownRect, new Color(58, 62, 70));
+            spriteBatch.Draw(pixel, new Rectangle(dropdownRect.X - 1, dropdownRect.Y - 1, dropdownRect.Width + 2, dropdownRect.Height + 2), new Color(70, 74, 82));
+            var desc = EventTrackRegistry.AllTypes.FirstOrDefault(d => d.TrackTypeId == _selectedTypeIdForAdd);
+            string dropdownText = desc?.DisplayName ?? _selectedTypeIdForAdd;
+            int textX = dropdownRect.X + DropdownTextLeft;
+            int textY = dropdownRect.Y + 3;
+            int textMaxW = dropdownRect.Width - DropdownTextLeft - DropdownArrowWidth - DropdownTextRightGap;
+            int textMaxH = dropdownRect.Height - 6;
+            InspectorDrawer.DrawLabelScaledToFit(spriteBatch, device, textX, textY, textMaxW, textMaxH, dropdownText, pixel);
+            // Dropdown arrow (small triangle, same style as InspectorDrawer enum row)
+            int ax = dropdownRect.Right - DropdownArrowWidth / 2 - 2;
+            int ay = dropdownRect.Y + dropdownRect.Height / 2;
+            for (int i = -3; i <= 3; i++)
+                for (int j = 0; j <= 4 - Math.Abs(i); j++)
+                    spriteBatch.Draw(pixel, new Rectangle(ax + i, ay - 2 + j, 1, 1), InspectorDrawer.FoldoutArrow);
+            var addRect = new Rectangle(listArea.X + Padding + DropdownWidth + 4, addRowY + 4, AddButtonWidth, TrackRowHeight - 8);
+            spriteBatch.Draw(pixel, addRect, new Color(70, 100, 130));
+            InspectorDrawer.DrawLabel(spriteBatch, device, addRect.X + 10, addRect.Y + 2, "+", pixel);
+        }
 
         if (_addDropdownOpen && EventTrackRegistry.AllTypes.Count > 0)
         {
             int dropdownHeight = 4 + EventTrackRegistry.AllTypes.Count * TrackRowHeight;
-            bool openUp = addRowY + TrackRowHeight + dropdownHeight > content.Bottom;
+            bool openUp = addRowY + TrackRowHeight + dropdownHeight > listArea.Bottom;
             int listY = openUp ? addRowY - dropdownHeight : addRowY + TrackRowHeight + 4;
-            spriteBatch.Draw(pixel, new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, dropdownHeight), new Color(42, 45, 50));
+            spriteBatch.Draw(pixel, new Rectangle(listArea.X + Padding, listY, listArea.Width - Padding * 2, dropdownHeight), new Color(42, 45, 50));
             listY += 4;
             foreach (var d in EventTrackRegistry.AllTypes)
             {
-                var rowRect = new Rectangle(content.X + Padding, listY, content.Width - Padding * 2, TrackRowHeight);
+                var rowRect = new Rectangle(listArea.X + Padding, listY, listArea.Width - Padding * 2, TrackRowHeight);
                 bool hover = rowRect.Contains(Input?.MousePosition ?? Point.Zero);
                 spriteBatch.Draw(pixel, rowRect, hover ? new Color(55, 58, 65) : new Color(48, 51, 56));
                 InspectorDrawer.DrawLabel(spriteBatch, device, rowRect.X + 6, rowRect.Y + 4, d.DisplayName, pixel);
                 listY += TrackRowHeight;
             }
+        }
+
+        // Scrollbar when content overflows
+        int _contentHeight = GetContentHeight();
+        if (_contentHeight > listArea.Height && content.Width > ScrollbarWidth)
+        {
+            var scrollbar = GetScrollbarBounds(content);
+            spriteBatch.Draw(pixel, scrollbar, new Color(50, 52, 58));
+            int maxScroll = Math.Max(0, _contentHeight - listArea.Height);
+            var thumb = GetThumbBounds(content, maxScroll);
+            spriteBatch.Draw(pixel, thumb, new Color(80, 84, 92));
         }
     }
 }

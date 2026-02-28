@@ -14,7 +14,10 @@ public sealed class GameViewOrbitCamera
     private const float OrbitDragSensitivity = 0.004f;
     private const float MinPitch = -1.4f;
     private const float MaxPitch = -0.2f;
+    private const float MinDistance = 1f;
+    private const float MaxDistance = 200f;
     private const float DefaultDistance = 8f;
+    private const float ZoomSensitivity = 0.0008f;
     private const float DefaultPitch = -0.644f;
     private const float DefaultYaw = -0.26f;
 
@@ -38,7 +41,7 @@ public sealed class GameViewOrbitCamera
     {
         OrbitYaw = yaw;
         OrbitPitch = Math.Clamp(pitch, MinPitch, MaxPitch);
-        Distance = Math.Clamp(distance, 1f, 200f);
+        Distance = Math.Clamp(distance, MinDistance, MaxDistance);
     }
 
     public bool IsCapturingMouse => _capturing;
@@ -131,8 +134,16 @@ public sealed class GameViewOrbitCamera
         }
         else if (mouseInViewport && !_orbitCapturing)
         {
-            if (input.IsKeyDown(Keys.Q)) OrbitYaw -= OrbitSpeed * dt;
-            if (input.IsKeyDown(Keys.E)) OrbitYaw += OrbitSpeed * dt;
+            if (input.IsKeyDown(Keys.Q)) OrbitYaw += OrbitSpeed * dt;
+            if (input.IsKeyDown(Keys.E)) OrbitYaw -= OrbitSpeed * dt;
+
+            // Scroll wheel: zoom in (decrease distance) / zoom out (increase distance)
+            int scroll = input.ScrollWheelDelta;
+            if (scroll != 0)
+            {
+                float factor = 1f - scroll * ZoomSensitivity;
+                Distance = Math.Clamp(Distance * factor, MinDistance, MaxDistance);
+            }
         }
     }
 

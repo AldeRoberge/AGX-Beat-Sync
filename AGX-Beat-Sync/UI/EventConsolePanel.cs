@@ -29,6 +29,8 @@ public class EventConsolePanel : PanelBase
     private int _scrollStartY;
     /// <summary>Selected line index (0-based), or -1 if none.</summary>
     private int _selectedIndex = -1;
+    /// <summary>True when scroll position is at bottom; used to auto-scroll only if user hasn't scrolled up.</summary>
+    private volatile bool _userAtBottom = true;
 
     public EventConsolePanel()
     {
@@ -52,6 +54,8 @@ public class EventConsolePanel : PanelBase
                 else if (_selectedIndex == 0) _selectedIndex = -1;
             }
         }
+        if (_userAtBottom)
+            _scrollY = int.MaxValue;
     }
 
     /// <summary>Clear all log entries (e.g. when starting a new playback).</summary>
@@ -61,6 +65,37 @@ public class EventConsolePanel : PanelBase
             _entries.Clear();
         _scrollY = 0;
         _selectedIndex = -1;
+        _userAtBottom = true;
+    }
+
+    /// <summary>Copy the selected log entry to the clipboard. Returns true if something was copied.</summary>
+    public bool CopySelectionToClipboard()
+    {
+        lock (_entriesLock)
+        {
+            if (_selectedIndex < 0 || _selectedIndex >= _entries.Count) return false;
+            string toCopy = _entries[_selectedIndex];
+            if (string.IsNullOrEmpty(toCopy)) return false;
+            try
+            {
+                Clipboard.SetText(toCopy);
+                return true;
+            }
+            catch { return false; }
+        }
+    }
+
+    /// <summary>Remove the selected log entry (for Cut). Returns true if an entry was removed.</summary>
+    public bool RemoveSelectedEntry()
+    {
+        lock (_entriesLock)
+        {
+            if (_selectedIndex < 0 || _selectedIndex >= _entries.Count) return false;
+            _entries.RemoveAt(_selectedIndex);
+            if (_selectedIndex >= _entries.Count) _selectedIndex = _entries.Count - 1;
+            if (_entries.Count == 0) _selectedIndex = -1;
+            return true;
+        }
     }
 
     public InputManager? Input { get; set; }
@@ -76,6 +111,7 @@ public class EventConsolePanel : PanelBase
             _contentHeight = _entries.Count * LineHeight;
 
         int maxScroll = Math.Max(0, _contentHeight - visibleHeight);
+        _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
 
         if (_scrollbarThumbDragging)
         {
@@ -143,6 +179,8 @@ public class EventConsolePanel : PanelBase
                 }
             }
         }
+
+        _userAtBottom = maxScroll <= 0 || _scrollY >= maxScroll;
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)
@@ -191,6 +229,16 @@ public class EventConsolePanel : PanelBase
             spriteBatch.Draw(pixel, scrollbar, new Color(50, 52, 58));
             var thumb = GetThumbBounds(content, Math.Max(0, _contentHeight - content.Height));
             spriteBatch.Draw(pixel, thumb, new Color(70, 74, 82));
+            // Gizmo: center grip to show thumb is grabbable (like in/out region)
+            if (thumb.Height >= 10)
+            {
+                var gripColor = new Color(45, 50, 58);
+                int gripLeft = thumb.X + 2;
+                int gripW = Math.Max(1, thumb.Width - 4);
+                int centerY = thumb.Y + thumb.Height / 2;
+                spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY - 2, gripW, 1), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY + 2, gripW, 1), gripColor);
+            }
         }
     }
 

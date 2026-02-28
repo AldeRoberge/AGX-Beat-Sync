@@ -10,7 +10,8 @@ public sealed class GameViewPlayer
 {
     public const int FrameCount = 4;
     public const float MoveSpeed = 8f;
-    public const float Height = 0.5f;
+    /// <summary>World Y for the player (ground plane). 0 = feet on the ground.</summary>
+    public const float Height = 0f;
 
     /// <summary>World position (XZ = ground plane, Y = Height).</summary>
     public Vector3 Position { get; private set; }
@@ -54,9 +55,28 @@ public sealed class GameViewPlayer
     /// <summary>Source rectangle for the current frame. Assumes 4 frames in a horizontal strip.</summary>
     public Rectangle GetSourceRectangle(Texture2D texture)
     {
+        return GetSourceRectangleForFrame(texture, Facing);
+    }
+
+    /// <summary>Source rectangle for a specific frame index (0=right, 1=down, 2=left, 3=up).</summary>
+    public static Rectangle GetSourceRectangleForFrame(Texture2D texture, int frame)
+    {
         int w = texture.Width / FrameCount;
-        int x = Facing * w;
+        int x = (frame % FrameCount) * w;
         return new Rectangle(x, 0, w, texture.Height);
+    }
+
+    /// <summary>Unit facing direction on the XZ plane (Y=0). 0=+X, 1=+Z, 2=-X, 3=-Z.</summary>
+    public Vector3 GetFacingDirectionXZ()
+    {
+        return Facing switch
+        {
+            0 => Vector3.UnitX,
+            1 => Vector3.UnitZ,
+            2 => -Vector3.UnitX,
+            3 => -Vector3.UnitZ,
+            _ => -Vector3.UnitZ
+        };
     }
 
     private static int FacingFromMove(Vector3 move)

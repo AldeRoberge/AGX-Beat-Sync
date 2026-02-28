@@ -12,11 +12,11 @@ namespace AGX_Beat_Sync.Editor;
 /// </summary>
 public static class InspectorDrawer
 {
-    public const int RowHeight = 20;
+    public const int RowHeight = 26;
     public const int Indent = 14;
     public const int LabelWidth = 100;
     public const int Padding = 10;
-    public const int FontSize = 11;
+    public const int FontSize = 12;
 
     private static readonly Dictionary<string, (Texture2D Tex, GraphicsDevice Device)> s_labelCache = new();
     private const int MaxCacheEntries = 128;
@@ -31,11 +31,28 @@ public static class InspectorDrawer
     public static readonly Color ControlBorder = new(70, 74, 82);
     public static readonly Color DropdownHoverBg = new(65, 70, 78);
 
+    /// <summary>Clears the label texture cache. Call when entering play or after device reset to avoid stale/wrong-sized textures.</summary>
+    public static void InvalidateLabelCache()
+    {
+        foreach (var kv in s_labelCache)
+        {
+            try { kv.Value.Tex.Dispose(); } catch { /* ignore */ }
+        }
+        s_labelCache.Clear();
+    }
+
     public static Texture2D? GetLabelTexture(GraphicsDevice device, string text)
     {
         if (string.IsNullOrEmpty(text)) return null;
-        if (s_labelCache.TryGetValue(text, out var entry) && entry.Device == device && !entry.Tex.IsDisposed)
-            return entry.Tex;
+
+        // Evict stale entries (wrong device or disposed) so we don't hold dead textures
+        if (s_labelCache.TryGetValue(text, out var entry))
+        {
+            if (entry.Device == device && !entry.Tex.IsDisposed)
+                return entry.Tex;
+            s_labelCache.Remove(text);
+            try { entry.Tex.Dispose(); } catch { /* already disposed */ }
+        }
 
         if (s_labelCache.Count >= MaxCacheEntries)
         {
@@ -50,28 +67,46 @@ public static class InspectorDrawer
         return tex;
     }
 
+    /// <summary>Normalize text for GDI+ rendering to avoid black squares from missing glyphs (e.g. Unicode ellipsis).</summary>
+    private static string NormalizeLabelText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        return text.Replace("\u2026", "..."); // Unicode ellipsis -> ASCII
+    }
+
+    private const int MaxLabelTextureSize = 512;
+
     private static Texture2D? CreateLabelTexture(GraphicsDevice device, string text)
     {
+        string renderText = NormalizeLabelText(text);
+        if (string.IsNullOrEmpty(renderText)) return null;
         try
         {
-            using var font = new Font("Segoe UI", FontSize, FontStyle.Regular);
-            using var bmp = new Bitmap(1, 1);
-            using (var g = Graphics.FromImage(bmp))
+            using var font = CreateLabelFont();
+            if (font == null) return null;
+            using var bitmap = new Bitmap(1, 1);
+            bitmap.SetResolution(96, 96);
+            using (var g = Graphics.FromImage(bitmap))
             {
-                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                var size = g.MeasureString(text, font);
-                int w = (int)Math.Ceiling(size.Width) + 2;
-                int h = (int)Math.Ceiling(size.Height) + 2;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
+                g.PageUnit = GraphicsUnit.Pixel;
+                g.PageScale = 1f;
+                var size = g.MeasureString(renderText, font);
+                int w = Math.Min(MaxLabelTextureSize, (int)Math.Ceiling(size.Width) + 2);
+                int h = Math.Min(MaxLabelTextureSize, (int)Math.Ceiling(size.Height) + 2);
                 if (w <= 0 || h <= 0) return null;
-                using var bitmap = new Bitmap(w, h);
-                using (var g2 = Graphics.FromImage(bitmap))
+                using var drawBitmap = new Bitmap(w, h);
+                drawBitmap.SetResolution(96, 96);
+                using (var g2 = Graphics.FromImage(drawBitmap))
                 {
-                    g2.Clear(System.Drawing.Color.Transparent);
-                    g2.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                    using var whiteBrush = new SolidBrush(System.Drawing.Color.White);
-                    g2.DrawString(text, font, whiteBrush, 0, 0);
+                    g2.Clear(LabelChromaKey);
+                    g2.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                    g2.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    g2.PageUnit = GraphicsUnit.Pixel;
+                    g2.PageScale = 1f;
+                    g2.DrawString(renderText, font, System.Drawing.Brushes.Black, 0, 0);
                 }
-                return BitmapToTexture(device, bitmap, w, h);
+                return BitmapChromaKeyToWhiteAlpha(device, drawBitmap, w, h);
             }
         }
         catch
@@ -80,8 +115,31 @@ public static class InspectorDrawer
         }
     }
 
-    private static Texture2D? BitmapToTexture(GraphicsDevice device, Bitmap bitmap, int width, int height)
+    private static Font? CreateLabelFont()
     {
+        try
+        {
+            return new Font("Segoe UI", FontSize, FontStyle.Regular);
+        }
+        catch
+        {
+            try
+            {
+                return new Font("Arial", FontSize, FontStyle.Regular);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    private static readonly System.Drawing.Color LabelChromaKey = System.Drawing.Color.Magenta;
+
+    /// <summary>Converts black-on-chroma bitmap to white text; chroma and near-white pixels become fully transparent.</summary>
+    private static Texture2D? BitmapChromaKeyToWhiteAlpha(GraphicsDevice device, Bitmap bitmap, int width, int height)
+    {
+        const int LuminanceBackgroundThreshold = 240; // pixels this bright are treated as background (avoids white haze from ClearType/GDI)
         var data = new Color[width * height];
         var rect = new System.Drawing.Rectangle(0, 0, width, height);
         var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -94,9 +152,14 @@ public static class InspectorDrawer
             {
                 for (int x = 0; x < width; x++)
                 {
-                    int i = y * width + x;
                     int off = y * bmpData.Stride + x * 4;
-                    data[i] = new Color(rawBytes[off + 2], rawBytes[off + 1], rawBytes[off], rawBytes[off + 3]);
+                    byte b = rawBytes[off], g = rawBytes[off + 1], r = rawBytes[off + 2];
+                    int lum = (r + g + b) / 3;
+                    bool isChroma = r >= 180 && b >= 180 && g <= 80;
+                    bool isBackground = lum >= LuminanceBackgroundThreshold;
+                    byte alpha = (isChroma || isBackground) ? (byte)0 : (byte)(255 - (byte)lum);
+                    int i = y * width + x;
+                    data[i] = new Color((byte)255, (byte)255, (byte)255, alpha);
                 }
             }
         }
@@ -120,6 +183,33 @@ public static class InspectorDrawer
         var tex = GetLabelTexture(device, text);
         if (tex != null)
             sb.Draw(tex, new Vector2(x, y), tint);
+    }
+
+    /// <summary>Draw a label clipped to maxWidth and maxHeight so it never overflows (e.g. dropdown text). Uses 1:1 source rect so no scaling.</summary>
+    public static void DrawLabelClipped(SpriteBatch sb, GraphicsDevice device, int x, int y, int maxWidth, int maxHeight, string text, Texture2D? pixel, Color? tint = null)
+    {
+        var tex = GetLabelTexture(device, text);
+        if (tex == null) return;
+        int w = Math.Min(tex.Width, maxWidth);
+        int h = Math.Min(tex.Height, maxHeight);
+        if (w <= 0 || h <= 0) return;
+        var dest = new Rectangle(x, y, w, h);
+        var src = new Rectangle(0, 0, w, h);
+        sb.Draw(tex, dest, src, tint ?? TextColor);
+    }
+
+    /// <summary>Draw a label scaled to fit within maxWidth and maxHeight so the full text is visible (no clipping).</summary>
+    public static void DrawLabelScaledToFit(SpriteBatch sb, GraphicsDevice device, int x, int y, int maxWidth, int maxHeight, string text, Texture2D? pixel, Color? tint = null)
+    {
+        var tex = GetLabelTexture(device, text);
+        if (tex == null) return;
+        float scale = Math.Min(1f, Math.Min((float)maxWidth / tex.Width, (float)maxHeight / tex.Height));
+        int w = (int)(tex.Width * scale);
+        int h = (int)(tex.Height * scale);
+        if (w <= 0 || h <= 0) return;
+        var dest = new Rectangle(x, y, w, h);
+        var src = new Rectangle(0, 0, tex.Width, tex.Height);
+        sb.Draw(tex, dest, src, tint ?? TextColor);
     }
 
     /// <summary>Draw a section header (e.g. track type name). Returns the height used.</summary>

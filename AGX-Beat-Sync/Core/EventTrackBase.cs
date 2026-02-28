@@ -18,25 +18,28 @@ public static class EventTrackConstants
 [JsonDerivedType(typeof(EmptyTrack), typeDiscriminator: "Empty")]
 [JsonDerivedType(typeof(SpawnEntityTrack), typeDiscriminator: "SpawnEntity")]
 [JsonDerivedType(typeof(SfxTrack), typeDiscriminator: "SFX")]
+[JsonDerivedType(typeof(ChangeEntityColorTrack), typeDiscriminator: "ChangeEntityColor")]
 public abstract class EventTrackBase : IEventTrack
 {
     private static readonly Random s_random = new();
 
-    /// <summary>Palette of beautiful pastel rainbow colors for new tracks.</summary>
+    /// <summary>Vivid track colors (green, blue, cyan, pink, purple) — no red/yellow. Used with white note textures so these show true.</summary>
     private static readonly Color[] s_trackColorPalette =
     {
-        new(255, 182, 193),  // pastel pink
-        new(255, 218, 185),  // pastel peach
-        new(255, 250, 205),  // pastel lemon
-        new(189, 252, 201),  // pastel mint
-        new(176, 224, 230),  // pastel powder blue
-        new(204, 204, 255),  // pastel periwinkle
-        new(218, 191, 255),  // pastel violet
-        new(230, 200, 255),  // pastel lavender
-        new(255, 200, 220),  // pastel rose
-        new(200, 235, 255),  // pastel sky
-        new(200, 255, 220),  // pastel seafoam
-        new(255, 230, 210),  // pastel apricot
+        new(80, 220, 130),   // green
+        new(100, 255, 150),   // bright green
+        new(0, 200, 180),     // teal
+        new(60, 200, 255),    // sky blue
+        new(100, 160, 255),   // blue
+        new(140, 120, 255),   // periwinkle
+        new(200, 100, 255),   // violet
+        new(255, 100, 220),   // magenta / hot pink
+        new(255, 110, 180),   // pink
+        new(255, 130, 200),   // rose pink
+        new(0, 230, 220),     // cyan
+        new(120, 230, 255),   // light cyan
+        new(180, 255, 120),   // lime
+        new(160, 220, 255),   // ice blue
     };
 
     /// <summary>Returns a random color for a new track.</summary>
@@ -47,7 +50,7 @@ public abstract class EventTrackBase : IEventTrack
     public string DisplayName { get; set; } = "Event Track";
     public int Order { get; set; }
     /// <summary>Color used for this track's note blocks on the timeline.</summary>
-    public Color TrackColor { get; set; } = new(255, 182, 193);
+    public Color TrackColor { get; set; } = new(100, 200, 255);
     public List<double> EventTimes { get; set; } = new();
 
     /// <summary>Duration in seconds per event time. Missing key = use DefaultEventDurationSeconds.</summary>

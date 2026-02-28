@@ -23,6 +23,13 @@ public class SpawnEntityTrack : EventTrackBase
     /// <summary>Lifetime in seconds before the bullet is removed.</summary>
     public float Lifetime { get; set; } = 5f;
 
+    // --- Projectile direction pattern ---
+    public ProjectileDirectionPattern DirectionPattern { get; set; } = ProjectileDirectionPattern.Linear;
+    /// <summary>Oscillation: wobble amplitude in degrees (only when DirectionPattern is Oscillation).</summary>
+    public float OscillationAmplitude { get; set; } = 15f;
+    /// <summary>Orbiting: radius of the orbit in world units (only when DirectionPattern is Orbiting).</summary>
+    public float OrbitingDistance { get; set; } = 2f;
+
     // --- Mode: Single = 1 bullet, Multiple = N bullets ---
     public SpawnMode SpawnMode { get; set; } = SpawnMode.Single;
     /// <summary>Number of bullets when SpawnMode is Multiple (1–10).</summary>

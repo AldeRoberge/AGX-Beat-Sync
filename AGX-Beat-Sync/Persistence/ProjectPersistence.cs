@@ -21,20 +21,20 @@ public static class ProjectPersistence
 
     /// <summary>Save current project, transport, optional timeline view, layout, and camera.
     /// If currentProjectPath is set (e.g. to an .agxbs file), saves state.json in that project folder; otherwise saves to AppData.</summary>
-    public static void Save(Project project, Transport transport, TimelineViewState? timelineView = null, int? gameViewHeightPx = null, int? gameViewWidthPx = null,
+    public static void Save(Project project, Transport transport, TimelineViewState? timelineView = null, int? gameViewHeightPx = null, int? gameViewWidthPx = null, int? inspectorWidthPx = null,
         float? cameraTargetX = null, float? cameraTargetY = null, float? cameraTargetZ = null, float? cameraOrbitYaw = null, float? cameraOrbitPitch = null, float? cameraOrbitDistance = null,
         string? currentProjectPath = null)
     {
         string path = !string.IsNullOrWhiteSpace(currentProjectPath) && currentProjectPath.EndsWith(".agxbs", StringComparison.OrdinalIgnoreCase)
             ? Path.Combine(Path.GetDirectoryName(currentProjectPath) ?? "", "state.json")
             : GetStatePath();
-        SaveToFile(project, transport, path, timelineView, gameViewHeightPx, gameViewWidthPx, cameraTargetX, cameraTargetY, cameraTargetZ, cameraOrbitYaw, cameraOrbitPitch, cameraOrbitDistance);
+        SaveToFile(project, transport, path, timelineView, gameViewHeightPx, gameViewWidthPx, inspectorWidthPx, cameraTargetX, cameraTargetY, cameraTargetZ, cameraOrbitYaw, cameraOrbitPitch, cameraOrbitDistance);
     }
 
     /// <summary>Save current project, transport, optional timeline view, layout, and camera to a specific file path (e.g. .agxbs).
     /// For .agxbs paths: creates a project folder when needed, copies imported music and .agxwf into it, and stores relative audio path.
     /// Returns the actual path where the file was written.</summary>
-    public static string SaveToFile(Project project, Transport transport, string filePath, TimelineViewState? timelineView = null, int? gameViewHeightPx = null, int? gameViewWidthPx = null,
+    public static string SaveToFile(Project project, Transport transport, string filePath, TimelineViewState? timelineView = null, int? gameViewHeightPx = null, int? gameViewWidthPx = null, int? inspectorWidthPx = null,
         float? cameraTargetX = null, float? cameraTargetY = null, float? cameraTargetZ = null, float? cameraOrbitYaw = null, float? cameraOrbitPitch = null, float? cameraOrbitDistance = null)
     {
         bool isAgxbs = filePath.EndsWith(".agxbs", StringComparison.OrdinalIgnoreCase);
@@ -104,6 +104,7 @@ public static class ProjectPersistence
                 GridSubdivisionsPerBeat = timelineView != null ? Math.Clamp(timelineView.GridSubdivisionsPerBeat, TimelineViewState.MinGridSubdivisions, TimelineViewState.MaxGridSubdivisions) : 4,
                 GameViewHeightPx = gameViewHeightPx ?? 120,
                 GameViewWidthPx = gameViewWidthPx ?? 0,
+                InspectorWidthPx = inspectorWidthPx ?? 0,
                 CameraTargetX = cameraTargetX ?? 0,
                 CameraTargetY = cameraTargetY ?? 0.5f,
                 CameraTargetZ = cameraTargetZ ?? 0,

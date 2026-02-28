@@ -12,17 +12,28 @@ namespace AGX_Beat_Sync.UI;
 public class TransportBarPanel : PanelBase
 {
     private const int ButtonWidth = 28;
+    private const int PlayPauseButtonWidth = 28;
     private const int BpmAreaWidth = 120;
     private const int TimeAreaWidth = 140;
     private const int Padding = 8;
+    private const int VolumeIconSize = 16;
     private const int VolumeSliderWidth = 88;
     private const int SliderTrackHeight = 16;
 
     private float _volume = 1f;
     private bool _volumeSliderDragging;
+    /// <summary>Game time until which to show "Volume: N%" in the status bar (set while dragging).</summary>
+    private double _volumeStatusVisibleUntil;
 
     /// <summary>Master volume (0.0 to 1.0). Synced to audio playback by the game.</summary>
     public float Volume { get => _volume; set => _volume = Math.Clamp(value, 0f, 1f); }
+
+    /// <summary>When the user is changing volume, returns e.g. "Volume: 75%" for the status bar; otherwise null.</summary>
+    public string? GetVolumeStatusText(double totalSeconds)
+    {
+        if (totalSeconds > _volumeStatusVisibleUntil) return null;
+        return "Volume: " + (int)Math.Round(_volume * 100) + "%";
+    }
 
     private Texture2D? _bpmTextTexture;
     private string _bpmCachedString = "";
@@ -32,10 +43,13 @@ public class TransportBarPanel : PanelBase
     private string _timeCachedString = "";
     private int _timeCachedWidth = -1;
     private int _timeCachedHeight = -1;
+    private Texture2D? _circleTexture;
 
     public Project? Project { get; set; }
     public Transport? Transport { get; set; }
     public Input.InputManager? Input { get; set; }
+    /// <summary>When true, show REC indicator; keys 1-9 and 0 add events to tracks while playing.</summary>
+    public bool RecordMode { get; set; }
 
     public TransportBarPanel()
     {
@@ -45,11 +59,20 @@ public class TransportBarPanel : PanelBase
         HeaderColor = new Color(45, 48, 52);
     }
 
-    private Rectangle GetVolumeSliderTrack()
+    private Rectangle GetVolumeIconRect()
     {
         int x = Bounds.X + Padding;
+        int y = Bounds.Y + (Bounds.Height - VolumeIconSize) / 2;
+        return new Rectangle(x, y, VolumeIconSize, VolumeIconSize);
+    }
+
+    private Rectangle GetVolumeSliderTrack()
+    {
+        var icon = GetVolumeIconRect();
+        int x = icon.Right + 4;
         int y = Bounds.Y + (Bounds.Height - SliderTrackHeight) / 2;
-        return new Rectangle(x, y, VolumeSliderWidth - Padding, SliderTrackHeight);
+        int width = VolumeSliderWidth - (icon.Width + 4 + Padding);
+        return new Rectangle(x, y, Math.Max(0, width), SliderTrackHeight);
     }
 
     private Rectangle GetBpmArea()
@@ -81,11 +104,33 @@ public class TransportBarPanel : PanelBase
     public Action? BpmEditRequested { get; set; }
     /// <summary>Invoked when user clicks the time area to type a position (HH:mm:ss:frame).</summary>
     public Action? TimeEditRequested { get; set; }
+    /// <summary>Invoked when user clicks the play/pause button (toggle).</summary>
+    public Action? OnPlayPauseToggle { get; set; }
+    /// <summary>Invoked when user clicks the REC button (toggle record mode).</summary>
+    public Action? OnRecordToggle { get; set; }
 
-    private Rectangle GetTimeAreaRect()
+    private Rectangle GetPlayPauseButtonRect()
     {
         var bpm = GetBpmArea();
         int x = bpm.Right + Padding;
+        int y = Bounds.Y + (Bounds.Height - 24) / 2;
+        return new Rectangle(x, y, PlayPauseButtonWidth, 24);
+    }
+
+    private const int RecButtonSize = 24;
+
+    private Rectangle GetRecButtonRect()
+    {
+        var playPause = GetPlayPauseButtonRect();
+        int x = playPause.Right + Padding;
+        int y = Bounds.Y + (Bounds.Height - RecButtonSize) / 2;
+        return new Rectangle(x, y, RecButtonSize, RecButtonSize);
+    }
+
+    private Rectangle GetTimeAreaRect()
+    {
+        var rec = GetRecButtonRect();
+        int x = rec.Right + Padding;
         int y = Bounds.Y + (Bounds.Height - 24) / 2;
         return new Rectangle(x, y, TimeAreaWidth, 24);
     }
@@ -93,13 +138,16 @@ public class TransportBarPanel : PanelBase
     public override string? GetHoverText(Point mouse)
     {
         if (!ContainsPoint(mouse)) return null;
+        var volIcon = GetVolumeIconRect();
         var volTrack = GetVolumeSliderTrack();
-        if (volTrack.Contains(mouse)) return "Volume";
+        if (volIcon.Contains(mouse) || volTrack.Contains(mouse)) return "Volume";
         var minus = GetBpmMinusButton();
         if (minus.Contains(mouse)) return "BPM −";
         var plus = GetBpmPlusButton();
         if (plus.Contains(mouse)) return "BPM +";
         if (GetBpmValueRect().Contains(mouse)) return "BPM — click to edit";
+        if (GetPlayPauseButtonRect().Contains(mouse)) return Transport?.IsPlaying == true ? "Pause (Space)" : "Play (Space)";
+        if (GetRecButtonRect().Contains(mouse)) return RecordMode ? "Record mode on (R). Press 1–9 or 0 while playing to add event to track." : "Record mode off (R). Click or press R to enable.";
         if (GetTimeAreaRect().Contains(mouse)) return "Time — click to go to position";
         return "Transport";
     }
@@ -110,7 +158,10 @@ public class TransportBarPanel : PanelBase
 
         var volTrack = GetVolumeSliderTrack();
         if (Input.MouseLeftPressed && volTrack.Contains(Input.MousePosition))
+        {
             _volumeSliderDragging = true;
+            _volumeStatusVisibleUntil = gameTime.TotalGameTime.TotalSeconds + 1.5;
+        }
         if (Input.MouseLeftReleased)
             _volumeSliderDragging = false;
 
@@ -118,11 +169,24 @@ public class TransportBarPanel : PanelBase
         {
             int mx = Math.Clamp(Input.MousePosition.X, volTrack.X, volTrack.Right);
             Volume = (float)(mx - volTrack.X) / volTrack.Width;
+            _volumeStatusVisibleUntil = gameTime.TotalGameTime.TotalSeconds + 1.5;
+        }
+
+        if (!Input.MouseLeftPressed) return;
+        if (!ContainsPoint(Input.MousePosition)) return;
+
+        if (GetPlayPauseButtonRect().Contains(Input.MousePosition))
+        {
+            OnPlayPauseToggle?.Invoke();
+            return;
+        }
+        if (GetRecButtonRect().Contains(Input.MousePosition))
+        {
+            OnRecordToggle?.Invoke();
+            return;
         }
 
         if (Transport == null || Project == null) return;
-        if (!Input.MouseLeftPressed) return;
-        if (!ContainsPoint(Input.MousePosition)) return;
 
         var minus = GetBpmMinusButton();
         var plus = GetBpmPlusButton();
@@ -161,7 +225,9 @@ public class TransportBarPanel : PanelBase
     {
         var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
 
-        // Volume slider (track + fill + thumb)
+        // Volume icon + slider (track + fill + thumb)
+        var volIconRect = GetVolumeIconRect();
+        DrawVolumeIcon(spriteBatch, pixel, volIconRect, new Color(200, 202, 208));
         var volTrack = GetVolumeSliderTrack();
         spriteBatch.Draw(pixel, volTrack, new Color(55, 58, 64));
         var fillWidth = (int)(volTrack.Width * _volume);
@@ -195,6 +261,26 @@ public class TransportBarPanel : PanelBase
             int x = center.X + (center.Width - _bpmTextTexture.Width) / 2;
             int y = center.Y + (center.Height - _bpmTextTexture.Height) / 2;
             spriteBatch.Draw(_bpmTextTexture, new Rectangle(x, y, _bpmTextTexture.Width, _bpmTextTexture.Height), Color.White);
+        }
+
+        // Play/Pause button (left of time)
+        var playPauseRect = GetPlayPauseButtonRect();
+        bool playPauseHover = playPauseRect.Contains(Input?.MousePosition ?? Point.Zero);
+        spriteBatch.Draw(pixel, playPauseRect, playPauseHover ? new Color(55, 58, 65) : new Color(48, 52, 58));
+        var iconColor = new Color(200, 202, 208);
+        if (Transport?.IsPlaying == true)
+            DrawPauseIcon(spriteBatch, pixel, playPauseRect, iconColor);
+        else
+            DrawPlayIcon(spriteBatch, pixel, playPauseRect, iconColor);
+
+        // REC circle button: gray when off, red when record mode on
+        var recRect = GetRecButtonRect();
+        bool recHover = recRect.Contains(Input?.MousePosition ?? Point.Zero);
+        EnsureCircleTexture(spriteBatch.GraphicsDevice);
+        if (_circleTexture != null)
+        {
+            Color recColor = RecordMode ? new Color(200, 50, 50) : (recHover ? new Color(90, 94, 100) : new Color(60, 64, 70));
+            spriteBatch.Draw(_circleTexture, recRect, recColor);
         }
 
         // Time area (HH:mm:ss:frame — click to type and go to position)
@@ -242,6 +328,35 @@ public class TransportBarPanel : PanelBase
         _timeTextTexture = CreateLabelTextTexture(device, text, w, h);
     }
 
+    private void EnsureCircleTexture(GraphicsDevice device)
+    {
+        if (_circleTexture != null && !_circleTexture.IsDisposed) return;
+        _circleTexture?.Dispose();
+        _circleTexture = CreateCircleTexture(device, RecButtonSize);
+    }
+
+    private static Texture2D? CreateCircleTexture(GraphicsDevice device, int size)
+    {
+        var data = new Microsoft.Xna.Framework.Color[size * size];
+        float cx = (size - 1) * 0.5f;
+        float cy = (size - 1) * 0.5f;
+        float r = cx - 0.5f;
+        float rSq = r * r;
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float dx = x - cx;
+                float dy = y - cy;
+                bool inside = (dx * dx + dy * dy) <= rSq;
+                data[y * size + x] = inside ? Microsoft.Xna.Framework.Color.White : Microsoft.Xna.Framework.Color.Transparent;
+            }
+        }
+        var tex = new Texture2D(device, size, size);
+        tex.SetData(data);
+        return tex;
+    }
+
     private static Texture2D? CreateLabelTextTexture(GraphicsDevice device, string text, int width, int height)
     {
         try
@@ -287,5 +402,68 @@ public class TransportBarPanel : PanelBase
         {
             return null;
         }
+    }
+
+    private static void DrawPlayIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    {
+        // Play = right-pointing: tip on LEFT, base (vertical edge) on RIGHT.
+        // Draw each row as a segment that ENDS at baseX so the tip is on the left.
+        int margin = 5;
+        int left = rect.X + margin;
+        int right = rect.Right - margin;
+        int top = rect.Y + margin;
+        int bottom = rect.Bottom - margin;
+        int h = bottom - top;
+        int w = right - left;
+        if (w <= 0 || h <= 0) return;
+        int maxW = Math.Max(2, (w * 55) / 100);
+        int centerRow = (h - 1) / 2;
+        int topHeight = Math.Max(1, centerRow);
+        int bottomHeight = Math.Max(1, h - 1 - centerRow);
+        int tipX = left + (w - maxW) / 2;   // tip at (tipX, center)
+        int baseX = tipX + maxW;             // base = vertical line at baseX
+        for (int row = 0; row < h; row++)
+        {
+            int width;
+            if (row <= centerRow)
+                width = (maxW * row) / topHeight;
+            else
+                width = (maxW * (h - 1 - row)) / bottomHeight;
+            if (width <= 0) continue;
+            int y = top + row;
+            spriteBatch.Draw(pixel, new Rectangle(baseX - width, y, width, 1), color);
+        }
+    }
+
+    private static void DrawPauseIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    {
+        int cx = rect.X + rect.Width / 2;
+        int cy = rect.Y + rect.Height / 2;
+        int barW = 2;
+        int gap = 2;
+        int barH = 8;
+        int leftX = cx - gap / 2 - barW;
+        int rightX = cx + gap / 2;
+        int y = cy - barH / 2;
+        spriteBatch.Draw(pixel, new Rectangle(leftX, y, barW, barH), color);
+        spriteBatch.Draw(pixel, new Rectangle(rightX, y, barW, barH), color);
+    }
+
+    private static void DrawVolumeIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    {
+        int x = rect.X;
+        int y = rect.Y;
+        // Speaker cone (trapezoid: narrow at back, wider at opening), centered vertically in 16x16
+        spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 5, 1, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 6, 2, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 1, y + 7, 3, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 1, y + 8, 4, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 1, y + 9, 3, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 10, 2, 1), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 11, 1, 1), color);
+        // Sound waves ))  — three arcs, expanding to the right
+        spriteBatch.Draw(pixel, new Rectangle(x + 6, y + 6, 1, 4), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 8, y + 5, 1, 6), color);
+        spriteBatch.Draw(pixel, new Rectangle(x + 10, y + 4, 1, 8), color);
     }
 }

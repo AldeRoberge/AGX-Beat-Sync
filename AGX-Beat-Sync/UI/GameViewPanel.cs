@@ -15,6 +15,17 @@ public class SpawnedEntity
     public float SpawnTime;
     /// <summary>Lifetime in seconds before removal.</summary>
     public float Lifetime { get; set; } = 5f;
+
+    // Direction pattern (Linear = use Velocity as-is)
+    public ProjectileDirectionPattern DirectionPattern { get; set; } = ProjectileDirectionPattern.Linear;
+    public Vector3 InitialDirection { get; set; }
+    public float Speed { get; set; }
+    public float OscillationAmplitude { get; set; }
+    public float OrbitingDistance { get; set; }
+    public Vector3 OrbitCenter { get; set; }
+    /// <summary>Orbit axes (only for Orbiting). OrbitRight and tangent at spawn.</summary>
+    public Vector3 OrbitRight { get; set; }
+    public Vector3 OrbitTangent { get; set; }
 }
 
 public class GameViewPanel : PanelBase
@@ -43,18 +54,67 @@ public class GameViewPanel : PanelBase
     /// <summary>Spawn an entity with a world-space direction (normalized or not). Used for pattern bursts.</summary>
     public void SpawnEntityWithDirection(Vector3 position, Vector3 direction, float speed, float lifetime = 5f)
     {
+        SpawnEntityWithDirection(position, direction, speed, lifetime, ProjectileDirectionPattern.Linear, 0f, 0f);
+    }
+
+    /// <summary>Spawn an entity with optional direction pattern (Oscillation, Orbiting).</summary>
+    public void SpawnEntityWithDirection(Vector3 position, Vector3 direction, float speed, float lifetime,
+        ProjectileDirectionPattern directionPattern, float oscillationAmplitude, float orbitingDistance)
+    {
         var d = direction;
         if (d.LengthSquared() < 1e-8f)
             d = -Vector3.UnitZ;
         else
             d.Normalize();
-        _spawnedEntities.Add(new SpawnedEntity
+
+        if (directionPattern == ProjectileDirectionPattern.Orbiting && orbitingDistance > 0.001f)
         {
-            Position = position,
-            Velocity = d * speed,
-            SpawnTime = (float)(Transport?.CurrentTime ?? 0),
-            Lifetime = lifetime
-        });
+            var radius = Math.Max(0.001f, orbitingDistance);
+            var right = Vector3.Cross(d, Vector3.UnitY);
+            if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
+            else right.Normalize();
+            var tangent = Vector3.Cross(Vector3.UnitY, right);
+            if (Vector3.Dot(tangent, d) < 0) tangent = -tangent;
+            tangent.Normalize();
+            var startPos = position + right * radius;
+            _spawnedEntities.Add(new SpawnedEntity
+            {
+                Position = startPos,
+                Velocity = tangent * speed,
+                SpawnTime = (float)(Transport?.CurrentTime ?? 0),
+                Lifetime = lifetime,
+                DirectionPattern = directionPattern,
+                Speed = speed,
+                OrbitingDistance = radius,
+                OrbitCenter = position,
+                OrbitRight = right,
+                OrbitTangent = tangent
+            });
+        }
+        else if (directionPattern == ProjectileDirectionPattern.Oscillation)
+        {
+            _spawnedEntities.Add(new SpawnedEntity
+            {
+                Position = position,
+                Velocity = d * speed,
+                SpawnTime = (float)(Transport?.CurrentTime ?? 0),
+                Lifetime = lifetime,
+                DirectionPattern = directionPattern,
+                InitialDirection = d,
+                Speed = speed,
+                OscillationAmplitude = Math.Abs(oscillationAmplitude)
+            });
+        }
+        else
+        {
+            _spawnedEntities.Add(new SpawnedEntity
+            {
+                Position = position,
+                Velocity = d * speed,
+                SpawnTime = (float)(Transport?.CurrentTime ?? 0),
+                Lifetime = lifetime
+            });
+        }
     }
 
     /// <summary>Spawn an entity that moves from position toward a target world position (e.g. player).</summary>
@@ -87,7 +147,7 @@ public class GameViewPanel : PanelBase
         var content = ContentBounds;
         var viewportRect = new Rectangle(content.X, content.Y, content.Width, Math.Max(0, content.Height));
         if (viewportRect.Contains(mouse))
-            return "Game View — WASD move player. Middle-drag: orbit. Right-drag: FPS camera. Q/E: orbit yaw";
+            return "Game View — WASD move player. Middle-drag: orbit. Right-drag: FPS camera. Q/E: orbit yaw. Scroll: zoom";
         return "Game View";
     }
 
@@ -184,7 +244,7 @@ public class GameViewPanel : PanelBase
                 device.DrawPrimitives(PrimitiveType.LineList, 0, _gridLineCount);
             }
 
-            // Static blue cube at world origin
+            // Enemy cube at world origin
             _effect.World = Matrix.CreateTranslation(Vector3.Zero);
             _effect.CurrentTechnique.Passes[0].Apply();
             device.SetVertexBuffer(_cubeBuffer);
@@ -219,17 +279,17 @@ public class GameViewPanel : PanelBase
             LightingEnabled = false
         };
 
-        // Cube: 1x1x1 centered at origin -> 8 vertices, 12 triangles
+        // Cube: 1x1x1 centered at origin (enemy) -> 8 vertices, 12 triangles
         var cubeVerts = new VertexPositionColor[8];
         float h = 0.5f;
-        cubeVerts[0] = new VertexPositionColor(new Vector3(-h, -h, -h), new Color(92, 148, 255));
-        cubeVerts[1] = new VertexPositionColor(new Vector3( h, -h, -h), new Color(92, 148, 255));
-        cubeVerts[2] = new VertexPositionColor(new Vector3( h,  h, -h), new Color(132, 188, 255));
-        cubeVerts[3] = new VertexPositionColor(new Vector3(-h,  h, -h), new Color(132, 188, 255));
-        cubeVerts[4] = new VertexPositionColor(new Vector3(-h, -h,  h), new Color(110, 170, 255));
-        cubeVerts[5] = new VertexPositionColor(new Vector3( h, -h,  h), new Color(110, 170, 255));
-        cubeVerts[6] = new VertexPositionColor(new Vector3( h,  h,  h), new Color(150, 200, 255));
-        cubeVerts[7] = new VertexPositionColor(new Vector3(-h,  h,  h), new Color(150, 200, 255));
+        cubeVerts[0] = new VertexPositionColor(new Vector3(-h, -h, -h), new Color(200, 80, 80));
+        cubeVerts[1] = new VertexPositionColor(new Vector3( h, -h, -h), new Color(200, 80, 80));
+        cubeVerts[2] = new VertexPositionColor(new Vector3( h,  h, -h), new Color(230, 100, 100));
+        cubeVerts[3] = new VertexPositionColor(new Vector3(-h,  h, -h), new Color(230, 100, 100));
+        cubeVerts[4] = new VertexPositionColor(new Vector3(-h, -h,  h), new Color(210, 90, 90));
+        cubeVerts[5] = new VertexPositionColor(new Vector3( h, -h,  h), new Color(210, 90, 90));
+        cubeVerts[6] = new VertexPositionColor(new Vector3( h,  h,  h), new Color(240, 120, 120));
+        cubeVerts[7] = new VertexPositionColor(new Vector3(-h,  h,  h), new Color(240, 120, 120));
 
         ushort[] cubeIndices =
         {
@@ -268,8 +328,8 @@ public class GameViewPanel : PanelBase
         _projectileIndices = new IndexBuffer(device, IndexElementSize.SixteenBits, 36, BufferUsage.None);
         _projectileIndices.SetData(projIndices);
 
-        // Plane: Y=0, 10x10 in XZ
-        float s = 5f;
+        // Plane: Y=0, 50x50 in XZ
+        float s = 25f;
         var planeVerts = new VertexPositionColor[6];
         var planeColor = new Color(52, 56, 64);
         planeVerts[0] = new VertexPositionColor(new Vector3(-s, 0, -s), planeColor);
@@ -282,10 +342,10 @@ public class GameViewPanel : PanelBase
         _planeBuffer = new VertexBuffer(device, VertexPositionColor.VertexDeclaration, 6, BufferUsage.None);
         _planeBuffer.SetData(planeVerts);
 
-        // Grid on Y=0: lines in XZ to match plane extent (±5), spacing 1
-        const float gridExtent = 5f;
-        const float gridSpacing = 1f;
-        var gridColor = new Color(70, 76, 88);
+        // Grid on Y=0: lines in XZ to match plane extent (±25), spacing 2 for more sections/lines
+        const float gridExtent = 25f;
+        const float gridSpacing = 2f;
+        var gridColor = new Color(38, 42, 50);
         var gridVerts = new List<VertexPositionColor>();
         for (float z = -gridExtent; z <= gridExtent; z += gridSpacing)
         {
@@ -328,6 +388,25 @@ public class GameViewPanel : PanelBase
                 _spawnedEntities.RemoveAt(i);
                 continue;
             }
+            float elapsed = currentTime - e.SpawnTime;
+            if (e.DirectionPattern == ProjectileDirectionPattern.Oscillation && e.OscillationAmplitude > 0)
+            {
+                float angleRad = (e.OscillationAmplitude * MathF.PI / 180f) * MathF.Sin(elapsed * 4f);
+                var right = Vector3.Cross(e.InitialDirection, Vector3.UnitY);
+                if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
+                else right.Normalize();
+                var dir = Vector3.Normalize(e.InitialDirection * MathF.Cos(angleRad) + right * MathF.Sin(angleRad));
+                e.Velocity = dir * e.Speed;
+            }
+            else if (e.DirectionPattern == ProjectileDirectionPattern.Orbiting && e.OrbitingDistance > 0)
+            {
+                float omega = e.Speed / e.OrbitingDistance;
+                float a = omega * elapsed;
+                float cosA = MathF.Cos(a), sinA = MathF.Sin(a);
+                e.Position = e.OrbitCenter + (e.OrbitRight * cosA + e.OrbitTangent * sinA) * e.OrbitingDistance;
+                e.Velocity = (-e.OrbitRight * sinA + e.OrbitTangent * cosA) * e.Speed;
+                continue;
+            }
             e.Position += e.Velocity * dt;
         }
     }
@@ -360,18 +439,48 @@ public class GameViewPanel : PanelBase
 
     private void DrawPlayerOverlay(SpriteBatch spriteBatch, Rectangle viewport)
     {
-        if (PlayerTexture == null || _lastViewportW <= 0 || _lastViewportH <= 0)
+        if (_lastViewportW <= 0 || _lastViewportH <= 0)
             return;
         Vector3 worldPos = _player.Position;
         if (!ProjectWorldToScreen(worldPos, _lastView, _lastProjection, _lastViewportW, _lastViewportH, out float sx, out float sy))
             return;
-        var source = _player.GetSourceRectangle(PlayerTexture);
-        const int drawHeight = 24;
+
+        // Scale player and shadow by camera distance so they shrink/grow with zoom (reference distance 8 = 24px height)
+        const float referenceDistance = 8f;
+        const int referenceDrawHeight = 24;
+        float scale = referenceDistance / Math.Max(0.1f, _camera.Distance);
+        int drawHeight = (int)(referenceDrawHeight * scale);
+        drawHeight = Math.Clamp(drawHeight, 4, 200);
+
+        // Shadow: dark ellipse under the feet (drawn first so player is on top), scaled with player
+        int shadowWidth = Math.Max(4, (int)(20 * scale));
+        int shadowHeight = Math.Max(2, (int)(6 * scale));
+        var shadowColor = new Color(0, 0, 0, 100);
+        int shadowX = (int)(viewport.X + sx) - shadowWidth / 2;
+        int shadowY = (int)(viewport.Y + sy) - shadowHeight / 2;
+        var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
+        spriteBatch.Draw(pixel, new Rectangle(shadowX, shadowY, shadowWidth, shadowHeight), shadowColor);
+
+        if (PlayerTexture == null)
+            return;
+        var (cameraForward, cameraRight) = _camera.GetCameraForwardRightXZ();
+        Vector3 facingXZ = _player.GetFacingDirectionXZ();
+        // Pick sprite frame from actual direction in camera-relative (screen) space: right=0, left=2, toward camera=1, away=3
+        int frame = GetCameraRelativeFrame(facingXZ, cameraForward, cameraRight);
+        var source = GameViewPlayer.GetSourceRectangleForFrame(PlayerTexture, frame);
         int drawWidth = drawHeight * source.Width / Math.Max(1, source.Height);
-        int x = (int)sx - drawWidth / 2;
-        int y = (int)sy - drawHeight;
-        var dest = new Rectangle(viewport.X + x, viewport.Y + y, drawWidth, drawHeight);
+        var dest = new Rectangle((int)(viewport.X + sx) - drawWidth / 2, (int)(viewport.Y + sy) - drawHeight, drawWidth, drawHeight);
         spriteBatch.Draw(PlayerTexture, dest, source, Color.White);
+    }
+
+    /// <summary>Frame index (0=right, 1=down, 2=left, 3=up) from world facing expressed in camera-relative terms.</summary>
+    private static int GetCameraRelativeFrame(Vector3 facingXZ, Vector3 cameraForward, Vector3 cameraRight)
+    {
+        float rightComponent = Vector3.Dot(facingXZ, cameraRight);
+        float forwardComponent = Vector3.Dot(facingXZ, cameraForward);
+        if (Math.Abs(rightComponent) >= Math.Abs(forwardComponent))
+            return rightComponent >= 0 ? 2 : 0; // screen right → 2 (left sprite), screen left → 0 (right sprite)
+        return forwardComponent >= 0 ? 1 : 3;   // away from camera → 1 (down), toward camera → 3 (up)
     }
 
     /// <summary>Rotation matrix that rotates 'from' onto 'to'. Both vectors must be unit length.</summary>

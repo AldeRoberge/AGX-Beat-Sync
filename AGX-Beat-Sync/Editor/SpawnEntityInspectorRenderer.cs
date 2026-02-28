@@ -16,6 +16,8 @@ public enum InspectorNumberField
     CircleRadius, CircleSpread,
     ConeSpreadAngle,
     LineLength,
+    OscillationAmplitude,
+    OrbitingDistance,
     PositionX, PositionY, PositionZ,
     RotationX, RotationY, RotationZ,
 }
@@ -29,6 +31,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private bool _rotationDropdownOpen;
     private bool _modeDropdownOpen;
     private bool _patternDropdownOpen;
+    private bool _directionPatternDropdownOpen;
 
     // Number field editing
     private InspectorNumberField _focusedField = InspectorNumberField.None;
@@ -57,6 +60,11 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private Rectangle _circleSpreadValueRect;
     private Rectangle _coneSpreadAngleValueRect;
     private Rectangle _lineLengthValueRect;
+    private Rectangle _directionPatternValueRect;
+    private Rectangle _directionPatternDropdownRect;
+    private Rectangle[] _directionPatternOptionRects = Array.Empty<Rectangle>();
+    private Rectangle _oscillationAmplitudeValueRect;
+    private Rectangle _orbitingDistanceValueRect;
     private Rectangle _fullCircleRect;
     private Rectangle[] _positionValueRects = Array.Empty<Rectangle>();
     private Rectangle[] _rotationValueRects = Array.Empty<Rectangle>();
@@ -65,6 +73,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private static readonly string[] RotationModeOptions = Enum.GetNames<RotationMode>();
     private static readonly string[] SpawnModeOptions = Enum.GetNames<SpawnMode>();
     private static readonly string[] SpawnPatternOptions = Enum.GetNames<SpawnPattern>();
+    private static readonly string[] ProjectileDirectionPatternOptions = Enum.GetNames<ProjectileDirectionPattern>();
 
     private static char? GetNumericKeyChar(Keys key)
     {
@@ -299,6 +308,40 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         string lifetimeText = _focusedField == InspectorNumberField.Lifetime ? _editText : t.Lifetime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         bool lifetimeCursorVisible = _focusedField == InspectorNumberField.Lifetime && (Environment.TickCount64 / 500) % 2 == 0;
         _lifetimeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Lifetime", lifetimeText, ref cursorY, showCaret: lifetimeCursorVisible);
+        y = cursorY;
+
+        // Direction pattern (projectile movement)
+        string directionPatternText = t.DirectionPattern.ToString();
+        _directionPatternValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Direction", directionPatternText, ref cursorY);
+        y = cursorY;
+        if (_directionPatternDropdownOpen)
+        {
+            int selected = (int)t.DirectionPattern;
+            (_directionPatternDropdownRect, _directionPatternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ProjectileDirectionPatternOptions, selected, ref cursorY, input.MousePosition);
+            y = cursorY;
+        }
+        else
+            _directionPatternOptionRects = Array.Empty<Rectangle>();
+
+        if (t.DirectionPattern == ProjectileDirectionPattern.Oscillation)
+        {
+            string ampText = _focusedField == InspectorNumberField.OscillationAmplitude ? _editText : t.OscillationAmplitude.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            _oscillationAmplitudeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Amplitude (°)", ampText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && (Environment.TickCount64 / 500) % 2 == 0);
+            y = cursorY;
+            _orbitingDistanceValueRect = default;
+        }
+        else if (t.DirectionPattern == ProjectileDirectionPattern.Orbiting)
+        {
+            _oscillationAmplitudeValueRect = default;
+            string distText = _focusedField == InspectorNumberField.OrbitingDistance ? _editText : t.OrbitingDistance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            _orbitingDistanceValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Distance", distText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && (Environment.TickCount64 / 500) % 2 == 0);
+            y = cursorY;
+        }
+        else
+        {
+            _oscillationAmplitudeValueRect = default;
+            _orbitingDistanceValueRect = default;
+        }
 
         y = cursorY;
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
@@ -478,6 +521,25 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             return;
         }
 
+        if (_directionPatternDropdownOpen)
+        {
+            if (_directionPatternDropdownRect.Contains(pt))
+            {
+                for (int i = 0; i < _directionPatternOptionRects.Length; i++)
+                {
+                    if (_directionPatternOptionRects[i].Contains(pt))
+                    {
+                        t.DirectionPattern = (ProjectileDirectionPattern)i;
+                        _directionPatternDropdownOpen = false;
+                        return;
+                    }
+                }
+            }
+            else
+                _directionPatternDropdownOpen = false;
+            return;
+        }
+
         if (t.SpawnMode == SpawnMode.Multiple && t.Pattern == SpawnPattern.Circle && _fullCircleRect != default && _fullCircleRect.Contains(pt))
         {
             t.CircleFullCircle = !t.CircleFullCircle;
@@ -490,6 +552,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _positionDropdownOpen = false;
             _rotationDropdownOpen = false;
             _patternDropdownOpen = false;
+            _directionPatternDropdownOpen = false;
             return;
         }
 
@@ -499,6 +562,17 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _positionDropdownOpen = false;
             _rotationDropdownOpen = false;
             _modeDropdownOpen = false;
+            _directionPatternDropdownOpen = false;
+            return;
+        }
+
+        if (!_directionPatternDropdownOpen && _directionPatternValueRect != default && _directionPatternValueRect.Contains(pt))
+        {
+            _directionPatternDropdownOpen = true;
+            _positionDropdownOpen = false;
+            _rotationDropdownOpen = false;
+            _modeDropdownOpen = false;
+            _patternDropdownOpen = false;
             return;
         }
 
@@ -547,6 +621,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         {
             _positionDropdownOpen = true;
             _rotationDropdownOpen = false;
+            _directionPatternDropdownOpen = false;
             return;
         }
 
@@ -555,6 +630,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         {
             _rotationDropdownOpen = true;
             _positionDropdownOpen = false;
+            _directionPatternDropdownOpen = false;
         }
     }
 
@@ -562,6 +638,8 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     {
         if (_speedValueRect.Contains(pt)) return true;
         if (_lifetimeValueRect.Contains(pt)) return true;
+        if (_oscillationAmplitudeValueRect != default && _oscillationAmplitudeValueRect.Contains(pt)) return true;
+        if (_orbitingDistanceValueRect != default && _orbitingDistanceValueRect.Contains(pt)) return true;
         if (_countValueRect.Contains(pt) && _countValueRect != default) return true;
         if (_circleRadiusValueRect.Contains(pt) && _circleRadiusValueRect != default) return true;
         if (_circleSpreadValueRect.Contains(pt) && _circleSpreadValueRect != default) return true;
@@ -576,6 +654,8 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     {
         if (_speedValueRect.Contains(pt)) return InspectorNumberField.Speed;
         if (_lifetimeValueRect.Contains(pt)) return InspectorNumberField.Lifetime;
+        if (_oscillationAmplitudeValueRect != default && _oscillationAmplitudeValueRect.Contains(pt)) return InspectorNumberField.OscillationAmplitude;
+        if (_orbitingDistanceValueRect != default && _orbitingDistanceValueRect.Contains(pt)) return InspectorNumberField.OrbitingDistance;
         if (_countValueRect != default && _countValueRect.Contains(pt)) return InspectorNumberField.Count;
         if (_circleRadiusValueRect != default && _circleRadiusValueRect.Contains(pt)) return InspectorNumberField.CircleRadius;
         if (_circleSpreadValueRect != default && _circleSpreadValueRect.Contains(pt)) return InspectorNumberField.CircleSpread;
@@ -608,6 +688,8 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             InspectorNumberField.CircleSpread => t.CircleSpread.ToString("0.##", inv),
             InspectorNumberField.ConeSpreadAngle => t.ConeSpreadAngle.ToString("0.##", inv),
             InspectorNumberField.LineLength => t.LineLength.ToString("0.##", inv),
+            InspectorNumberField.OscillationAmplitude => t.OscillationAmplitude.ToString("0.##", inv),
+            InspectorNumberField.OrbitingDistance => t.OrbitingDistance.ToString("0.##", inv),
             InspectorNumberField.PositionX => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.X : t.PositionRelative.X).ToString("0.##", inv),
             InspectorNumberField.PositionY => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.Y : t.PositionRelative.Y).ToString("0.##", inv),
             InspectorNumberField.PositionZ => (t.PositionMode == PositionMode.Absolute ? t.PositionAbsolute.Z : t.PositionRelative.Z).ToString("0.##", inv),
@@ -645,6 +727,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 break;
             case InspectorNumberField.LineLength:
                 t.LineLength = Math.Max(0.001f, value);
+                break;
+            case InspectorNumberField.OscillationAmplitude:
+                t.OscillationAmplitude = Math.Clamp(value, 0.1f, 180f);
+                break;
+            case InspectorNumberField.OrbitingDistance:
+                t.OrbitingDistance = Math.Max(0.001f, value);
                 break;
             case InspectorNumberField.PositionX:
                 if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(value, t.PositionAbsolute.Y, t.PositionAbsolute.Z);

@@ -101,10 +101,10 @@ public static class WaveformRenderer
 
         public static WaveformStyle Default => new()
         {
-            // Slightly more transparent waveform so notes/grid stand out more
-            Background = new Color(24, 26, 32, 80),
-            CenterLine = new Color(48, 52, 60, 70),
-            Fill = new Color(96, 160, 200, 90),
+            // Darker waveform so it reads clearly without overpowering notes/grid
+            Background = new Color(18, 20, 26, 100),
+            CenterLine = new Color(36, 40, 48, 90),
+            Fill = new Color(48, 88, 120, 130),
             VerticalScale = 0.4f
         };
     }
