@@ -126,8 +126,8 @@ public class TimelinePanel : PanelBase
     private const int NoteTextureHeight = 48;
     /// <summary>Corner radius in texture — large so scaled notes stay obviously rounded, not square.</summary>
     private const int NoteTextureCornerRadius = 16;
-    /// <summary>Corner radius when drawing (used for resize handle inset etc.).</summary>
-    private const int NoteCornerRadius = 4;
+    /// <summary>Corner radius when drawing — FL Studio style: nicely rounded corners (used for 9-slice and resize handle inset).</summary>
+    private const int NoteCornerRadius = 8;
     private static Texture2D? s_noteFillTexture;
     private static Texture2D? s_noteSelectedFillTexture;
     private static Texture2D? s_noteBorderTexture;
@@ -1506,12 +1506,9 @@ public class TimelinePanel : PanelBase
                     fillTex = selected ? s_noteSelectedFillTexture : s_noteFillTexture;
                     borderTex = selected ? s_noteSelectedBorderTexture : s_noteBorderTexture;
                     int x = (int)fx;
-                    // Draw full rounded-rect texture scaled to note size so the rounded shape is always visible (no 9-slice squashing)
-                    var borderDest = new Rectangle(x - 1, y - 1, blockW + 2, h + 2);
-                    var fillDest = new Rectangle(x, y, blockW, h);
-                    var fullSource = new Rectangle(0, 0, NoteTextureWidth, NoteTextureHeight);
-                    spriteBatch.Draw(borderTex, borderDest, fullSource, selBorderTint);
-                    spriteBatch.Draw(fillTex, fillDest, fullSource, fillTint);
+                    // FL Studio style: 9-slice rounded rect so corners stay perfectly circular at any note size (pill-shaped ends when long)
+                    DrawRoundedRect9Slice(spriteBatch, borderTex, x - 1, y - 1, blockW + 2, h + 2, selBorderTint);
+                    DrawRoundedRect9Slice(spriteBatch, fillTex, x, y, blockW, h, fillTint);
                     // Resize handles: pill-shaped with rounded ends when note is wide enough (zoomed in)
                     if (blockW >= MinNoteWidthForResize && blockW >= NoteResizeHandleWidth && h > NoteCornerRadius * 2 && s_resizeHandlePillTexture != null)
                     {
@@ -1553,11 +1550,8 @@ public class TimelinePanel : PanelBase
                         const byte ghostBorderAlpha = 95;
                         Color fillTint = new Color(trackColor.R, trackColor.G, trackColor.B, ghostFillAlpha);
                         Color borderPreview = new Color(borderTint.R, borderTint.G, borderTint.B, ghostBorderAlpha);
-                        var borderDest = new Rectangle(x - 1, y - 1, blockW + 2, h + 2);
-                        var fillDest = new Rectangle(x, y, blockW, h);
-                        var fullSource = new Rectangle(0, 0, NoteTextureWidth, NoteTextureHeight);
-                        spriteBatch.Draw(s_noteBorderTexture, borderDest, fullSource, borderPreview);
-                        spriteBatch.Draw(s_noteFillTexture, fillDest, fullSource, fillTint);
+                        DrawRoundedRect9Slice(spriteBatch, s_noteBorderTexture, x - 1, y - 1, blockW + 2, h + 2, borderPreview);
+                        DrawRoundedRect9Slice(spriteBatch, s_noteFillTexture, x, y, blockW, h, fillTint);
                     }
                 }
             }

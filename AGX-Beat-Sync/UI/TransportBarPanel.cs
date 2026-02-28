@@ -44,6 +44,8 @@ public class TransportBarPanel : PanelBase
     private int _timeCachedWidth = -1;
     private int _timeCachedHeight = -1;
     private Texture2D? _circleTexture;
+    private Texture2D? _playIconTexture;
+    private const int PlayIconSize = 14;
 
     public Project? Project { get; set; }
     public Transport? Transport { get; set; }
@@ -271,7 +273,7 @@ public class TransportBarPanel : PanelBase
         if (Transport?.IsPlaying == true)
             DrawPauseIcon(spriteBatch, pixel, playPauseRect, iconColor);
         else
-            DrawPlayIcon(spriteBatch, pixel, playPauseRect, iconColor);
+            DrawPlayIcon(spriteBatch, spriteBatch.GraphicsDevice, pixel, playPauseRect, iconColor);
 
         // REC circle button: gray when off, red when record mode on
         var recRect = GetRecButtonRect();
@@ -333,6 +335,41 @@ public class TransportBarPanel : PanelBase
         if (_circleTexture != null && !_circleTexture.IsDisposed) return;
         _circleTexture?.Dispose();
         _circleTexture = CreateCircleTexture(device, RecButtonSize);
+    }
+
+    private void EnsurePlayIconTexture(GraphicsDevice device)
+    {
+        if (_playIconTexture != null && !_playIconTexture.IsDisposed) return;
+        _playIconTexture?.Dispose();
+        _playIconTexture = CreatePlayIconTexture(device);
+    }
+
+    private static Texture2D? CreatePlayIconTexture(GraphicsDevice device)
+    {
+        const int w = PlayIconSize;
+        const int h = PlayIconSize;
+        int maxW = Math.Max(2, (w * 55) / 100);
+        int centerRow = (h - 1) / 2;
+        int topHeight = Math.Max(1, centerRow);
+        int bottomHeight = Math.Max(1, h - 1 - centerRow);
+        var data = new Microsoft.Xna.Framework.Color[w * h];
+        for (int i = 0; i < data.Length; i++)
+            data[i] = Microsoft.Xna.Framework.Color.Transparent;
+        // Build left-pointing triangle in texture (base at x=0, tip at x=maxW). We draw with FlipHorizontally so it displays right-pointing.
+        for (int row = 0; row < h; row++)
+        {
+            int width;
+            if (row <= centerRow)
+                width = (maxW * row) / topHeight;
+            else
+                width = (maxW * (h - 1 - row)) / bottomHeight;
+            if (width <= 0) continue;
+            for (int x = 0; x < width; x++)
+                data[row * w + x] = Microsoft.Xna.Framework.Color.White;
+        }
+        var tex = new Texture2D(device, w, h);
+        tex.SetData(data);
+        return tex;
     }
 
     private static Texture2D? CreateCircleTexture(GraphicsDevice device, int size)
@@ -404,10 +441,32 @@ public class TransportBarPanel : PanelBase
         }
     }
 
-    private static void DrawPlayIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    private void DrawPlayIcon(SpriteBatch spriteBatch, GraphicsDevice device, Texture2D pixel, Rectangle rect, Color color)
     {
-        // Play = right-pointing: tip on LEFT, base (vertical edge) on RIGHT.
-        // Draw each row as a segment that ENDS at baseX so the tip is on the left.
+        EnsurePlayIconTexture(device);
+        if (_playIconTexture != null)
+        {
+            int margin = 5;
+            int left = rect.X + margin;
+            int right = rect.Right - margin;
+            int top = rect.Y + margin;
+            int bottom = rect.Bottom - margin;
+            int w = right - left;
+            int h = bottom - top;
+            if (w > 0 && h > 0)
+            {
+                var dest = new Rectangle(left + (w - PlayIconSize) / 2, top + (h - PlayIconSize) / 2, PlayIconSize, PlayIconSize);
+                spriteBatch.Draw(_playIconTexture, dest, null, color, 0, Vector2.Zero, SpriteEffects.FlipHorizontally, 0);
+            }
+        }
+        else
+        {
+            DrawPlayIconFallback(spriteBatch, pixel, rect, color);
+        }
+    }
+
+    private static void DrawPlayIconFallback(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    {
         int margin = 5;
         int left = rect.X + margin;
         int right = rect.Right - margin;
@@ -420,8 +479,8 @@ public class TransportBarPanel : PanelBase
         int centerRow = (h - 1) / 2;
         int topHeight = Math.Max(1, centerRow);
         int bottomHeight = Math.Max(1, h - 1 - centerRow);
-        int tipX = left + (w - maxW) / 2;   // tip at (tipX, center)
-        int baseX = tipX + maxW;             // base = vertical line at baseX
+        int tipX = left + (w - maxW) / 2;
+        int baseX = tipX + maxW;
         for (int row = 0; row < h; row++)
         {
             int width;
@@ -430,8 +489,7 @@ public class TransportBarPanel : PanelBase
             else
                 width = (maxW * (h - 1 - row)) / bottomHeight;
             if (width <= 0) continue;
-            int y = top + row;
-            spriteBatch.Draw(pixel, new Rectangle(baseX - width, y, width, 1), color);
+            spriteBatch.Draw(pixel, new Rectangle(baseX - width, top + row, width, 1), color);
         }
     }
 

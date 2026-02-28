@@ -96,7 +96,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         };
     }
 
-    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY)
+    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY, EditorSelection? selection)
     {
         if (track is not SpawnEntityTrack t)
             return;
@@ -385,7 +385,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         return new Rectangle(x + w - valueW - InspectorDrawer.Padding, y + 2, valueW, InspectorDrawer.RowHeight - 4);
     }
 
-    public void Update(IEventTrack track, InputManager input, Rectangle contentArea)
+    public void Update(IEventTrack track, InputManager input, Rectangle contentArea, EditorSelection? selection)
     {
         if (track is not SpawnEntityTrack t)
             return;

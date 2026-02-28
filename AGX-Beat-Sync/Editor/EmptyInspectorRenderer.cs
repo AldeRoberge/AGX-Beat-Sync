@@ -7,12 +7,12 @@ namespace AGX_Beat_Sync.Editor;
 
 public class EmptyInspectorRenderer : IInspectorRenderer
 {
-    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY)
+    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY, EditorSelection? selection)
     {
         // Empty track has no properties; track type is shown at top of inspector panel
     }
 
-    public void Update(IEventTrack track, InputManager input, Rectangle contentArea)
+    public void Update(IEventTrack track, InputManager input, Rectangle contentArea, EditorSelection? selection)
     {
     }
 }

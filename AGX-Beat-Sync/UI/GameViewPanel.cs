@@ -188,6 +188,43 @@ public class GameViewPanel : PanelBase
     private VertexBuffer? _planeBuffer;
     private VertexBuffer? _gridBuffer;
     private int _gridLineCount;
+    private Color _enemyCubeColor = new Color(200, 80, 80);
+
+    /// <summary>Set the entity (enemy cube) color. Called when a Change Entity Color event fires.</summary>
+    public void SetEnemyCubeColor(Color color)
+    {
+        _enemyCubeColor = color;
+        if (_cubeBuffer != null)
+            RebuildEnemyCubeBuffer();
+    }
+
+    private VertexPositionColor[] BuildEnemyCubeVertices(float h)
+    {
+        var c = _enemyCubeColor;
+        byte r = c.R, g = c.G, b = c.B;
+        var dark = new Color((byte)Math.Max(0, r - 40), (byte)Math.Max(0, g - 40), (byte)Math.Max(0, b - 40));
+        var mid = new Color((byte)Math.Min(255, r + 10), (byte)Math.Min(255, g + 10), (byte)Math.Min(255, b + 10));
+        var bright = new Color((byte)Math.Min(255, r + 40), (byte)Math.Min(255, g + 40), (byte)Math.Min(255, b + 40));
+        return new VertexPositionColor[]
+        {
+            new(new Vector3(-h, -h, -h), dark),
+            new(new Vector3( h, -h, -h), dark),
+            new(new Vector3( h,  h, -h), mid),
+            new(new Vector3(-h,  h, -h), mid),
+            new(new Vector3(-h, -h,  h), mid),
+            new(new Vector3( h, -h,  h), mid),
+            new(new Vector3( h,  h,  h), bright),
+            new(new Vector3(-h,  h,  h), bright)
+        };
+    }
+
+    private void RebuildEnemyCubeBuffer()
+    {
+        var device = GraphicsDevice;
+        if (device == null || _cubeBuffer == null) return;
+        var verts = BuildEnemyCubeVertices(0.5f);
+        _cubeBuffer.SetData(verts);
+    }
 
     public GameViewPanel()
     {
@@ -279,18 +316,9 @@ public class GameViewPanel : PanelBase
             LightingEnabled = false
         };
 
-        // Cube: 1x1x1 centered at origin (enemy) -> 8 vertices, 12 triangles
-        var cubeVerts = new VertexPositionColor[8];
+        // Cube: 1x1x1 centered at origin (enemy) -> 8 vertices, 12 triangles; color from _enemyCubeColor
         float h = 0.5f;
-        cubeVerts[0] = new VertexPositionColor(new Vector3(-h, -h, -h), new Color(200, 80, 80));
-        cubeVerts[1] = new VertexPositionColor(new Vector3( h, -h, -h), new Color(200, 80, 80));
-        cubeVerts[2] = new VertexPositionColor(new Vector3( h,  h, -h), new Color(230, 100, 100));
-        cubeVerts[3] = new VertexPositionColor(new Vector3(-h,  h, -h), new Color(230, 100, 100));
-        cubeVerts[4] = new VertexPositionColor(new Vector3(-h, -h,  h), new Color(210, 90, 90));
-        cubeVerts[5] = new VertexPositionColor(new Vector3( h, -h,  h), new Color(210, 90, 90));
-        cubeVerts[6] = new VertexPositionColor(new Vector3( h,  h,  h), new Color(240, 120, 120));
-        cubeVerts[7] = new VertexPositionColor(new Vector3(-h,  h,  h), new Color(240, 120, 120));
-
+        var cubeVerts = BuildEnemyCubeVertices(h);
         ushort[] cubeIndices =
         {
             0, 1, 2, 0, 2, 3, 1, 5, 6, 1, 6, 2, 5, 4, 7, 5, 7, 6,
@@ -301,7 +329,6 @@ public class GameViewPanel : PanelBase
         _cubeBuffer.SetData(cubeVerts);
         _cubeIndices = new IndexBuffer(device, IndexElementSize.SixteenBits, 36, BufferUsage.None);
         _cubeIndices.SetData(cubeIndices);
-
         // Projectile: elongated box (nose at -Z, tail at +Z), bullet-like colors
         float pr = 0.05f;
         float pz = 0.2f;

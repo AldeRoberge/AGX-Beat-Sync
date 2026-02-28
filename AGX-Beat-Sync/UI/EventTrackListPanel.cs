@@ -57,6 +57,8 @@ public class EventTrackListPanel : PanelBase
     public Project? Project { get; set; }
     public EditorSelection? Selection { get; set; }
     public InputManager? Input { get; set; }
+    /// <summary>When true, show 1–9 and 0 next to tracks to indicate record shortcut keys.</summary>
+    public bool RecordMode { get; set; }
     /// <summary>When user clicks the remove track button; game should show confirmation then remove if confirmed.</summary>
     public Action<EventTrackBase>? OnDeleteTrackRequested { get; set; }
 
@@ -394,6 +396,14 @@ public class EventTrackListPanel : PanelBase
                 spriteBatch.Draw(pixel, new Rectangle(listArea.X + GrabHandleLeft, line2Y, GrabHandleLineWidth, GrabHandleLineHeight), GrabHandleColor);
 
                 InspectorDrawer.DrawLabel(spriteBatch, device, listArea.X + GrabHandleLeft + GrabHandleLineWidth + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
+
+                // Record mode: show key hint (1–9, 0) for first 10 tracks
+                if (RecordMode && index < 10)
+                {
+                    string keyHint = (index + 1) % 10 == 0 ? "0" : ((index + 1) % 10).ToString();
+                    int keyX = rowRect.Right - RemoveButtonWidth - 20;
+                    InspectorDrawer.DrawLabel(spriteBatch, device, keyX, y + 4, keyHint, pixel, new Color(140, 180, 220));
+                }
 
                 var removeRect = new Rectangle(rowRect.Right - RemoveButtonWidth - 2, y + 2, RemoveButtonWidth, TrackRowHeight - 4);
                 InspectorDrawer.DrawLabel(spriteBatch, device, removeRect.X + 6, removeRect.Y + 2, "×", pixel);

@@ -147,6 +147,8 @@ public class InspectorPanel : PanelBase
                                     newBase.TrackColor = selectedTrack.TrackColor;
                                     newBase.EventTimes = new List<double>(selectedTrack.EventTimes);
                                     newBase.EventDurations = new Dictionary<double, double>(selectedTrack.EventDurations);
+                                    if (newTrack is ChangeEntityColorTrack newColorTrack && selectedTrack is ChangeEntityColorTrack oldColorTrack)
+                                        newColorTrack.EventColors = new Dictionary<double, EntityColor>(oldColorTrack.EventColors);
                                 }
                                 int idx = Project.EventTracks.IndexOf(selectedTrack);
                                 if (idx >= 0)
@@ -228,7 +230,7 @@ public class InspectorPanel : PanelBase
 
             // Pass content area for hit-test (renderer controls are in screen space)
             if (contentArea.Contains(Input.MousePosition))
-                renderer.Update(Selection.SelectedEventTrack, Input, contentArea);
+                renderer.Update(Selection.SelectedEventTrack, Input, contentArea, Selection);
         }
     }
 
@@ -279,7 +281,7 @@ public class InspectorPanel : PanelBase
                 int bodyStartY = contentArea.Y + fixedTop - _scrollY;
                 var bodyArea = new Rectangle(contentArea.X, bodyStartY, contentArea.Width, Math.Max(contentArea.Height, 4096));
                 int cursorY = bodyStartY;
-                renderer.Draw(spriteBatch, bodyArea, Selection.SelectedEventTrack, Input, ref cursorY);
+                renderer.Draw(spriteBatch, bodyArea, Selection.SelectedEventTrack, Input, ref cursorY, Selection);
                 _contentHeight = Math.Max(0, cursorY - (contentArea.Y + fixedTop));
 
                 spriteBatch.End();

@@ -13,7 +13,7 @@ public class SfxInspectorRenderer : IInspectorRenderer
     private string _editText = "";
     private Rectangle _pathValueRect;
 
-    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY)
+    public void Draw(SpriteBatch sb, Rectangle contentArea, IEventTrack track, InputManager input, ref int cursorY, EditorSelection? selection)
     {
         if (track is not SfxTrack t)
             return;
@@ -28,7 +28,7 @@ public class SfxInspectorRenderer : IInspectorRenderer
         _pathValueRect = InspectorDrawer.DrawStringRow(sb, pixel, sb.GraphicsDevice, x, y, w, "FMOD Audio Event Path", valueText, ref cursorY, showCaret: cursorVisible);
     }
 
-    public void Update(IEventTrack track, InputManager input, Rectangle contentArea)
+    public void Update(IEventTrack track, InputManager input, Rectangle contentArea, EditorSelection? selection)
     {
         if (track is not SfxTrack t)
             return;

@@ -474,35 +474,24 @@ public class BeatSyncGame : Game
         _openDialogPanel.ClearResult();
     }
 
-    /// <summary>Handles result after the options dialog is closed (e.g. delete track confirmation).</summary>
+    private void RemoveTracksImmediate(IReadOnlyList<EventTrackBase> tracks)
+    {
+        if (tracks == null || tracks.Count == 0) return;
+        foreach (var t in tracks)
+        {
+            if (Project.EventTracks.Contains(t))
+                Project.EventTracks.Remove(t);
+        }
+        Selection.RemoveTracksFromSelection(tracks);
+        Selection.SelectedEventTime = null;
+        if (Selection.SelectedEventTrack == null && Project.EventTracks.Count > 0)
+            Selection.SelectedEventTrack = Project.EventTracks[0];
+    }
+
+    /// <summary>Handles result after the options dialog is closed.</summary>
     private void ApplyOptionsDialogResult()
     {
-        string? id = _optionsDialogPanel.SelectedOptionId;
         _optionsDialogPanel.ClearResult();
-        if (id == "delete")
-        {
-            if (_pendingDeleteTracks != null && _pendingDeleteTracks.Count > 0)
-            {
-                foreach (var t in _pendingDeleteTracks)
-                {
-                    if (Project.EventTracks.Contains(t))
-                        Project.EventTracks.Remove(t);
-                }
-                Selection.RemoveTracksFromSelection(_pendingDeleteTracks);
-                Selection.SelectedEventTime = null;
-                if (Selection.SelectedEventTrack == null && Project.EventTracks.Count > 0)
-                    Selection.SelectedEventTrack = Project.EventTracks[0];
-            }
-            else if (_pendingDeleteTrack != null && Project.EventTracks.Contains(_pendingDeleteTrack))
-            {
-                Project.EventTracks.Remove(_pendingDeleteTrack);
-                if (Selection.SelectedEventTrack == _pendingDeleteTrack)
-                {
-                    Selection.SelectedEventTrack = Project.EventTracks.FirstOrDefault();
-                    Selection.SelectedEventTime = null;
-                }
-            }
-        }
         _pendingDeleteTrack = null;
         _pendingDeleteTracks = null;
     }
@@ -709,6 +698,7 @@ public class BeatSyncGame : Game
                 Transport.Play();
                 if (_audio.LoadedFilePath != null)
                 {
+                    _audio.StopOutputOnly();
                     _audio.Seek(Transport.CurrentTime);
                     _audio.Play();
                 }
@@ -735,18 +725,8 @@ public class BeatSyncGame : Game
                     .Where(t => t is EventTrackBase b && Project.EventTracks.Contains(b))
                     .Cast<EventTrackBase>()
                     .ToList();
-                if (trackList.Count == 1)
-                {
-                    _pendingDeleteTrack = trackList[0];
-                    _pendingDeleteTracks = null;
-                    _optionsDialogPanel.Open("Delete track?", $"Remove '{trackList[0].DisplayName}'? This cannot be undone.", new[] { ("Delete", "delete"), ("Cancel", "cancel") });
-                }
-                else if (trackList.Count > 1)
-                {
-                    _pendingDeleteTrack = null;
-                    _pendingDeleteTracks = trackList;
-                    _optionsDialogPanel.Open("Delete tracks?", $"Remove {trackList.Count} tracks? This cannot be undone.", new[] { ("Delete", "delete"), ("Cancel", "cancel") });
-                }
+                if (trackList.Count > 0)
+                    RemoveTracksImmediate(trackList);
             }
         }
         bool shift = Input.IsKeyDown(Keys.LeftShift) || Input.IsKeyDown(Keys.RightShift);
@@ -838,10 +818,16 @@ public class BeatSyncGame : Game
                         string message = track switch
                         {
                             SpawnEntityTrack => "spawned entity",
+                            ChangeEntityColorTrack => "changed entity color",
                             _ => "fired"
                         };
                         _eventConsolePanel.LogEvent(Transport.CurrentTime, track.DisplayName, message);
-                        if (track is SpawnEntityTrack spawnTrack)
+                        if (track is ChangeEntityColorTrack colorTrack)
+                        {
+                            var xnaColor = ChangeEntityColorTrack.ToXnaColor(colorTrack.GetColor(eventTime));
+                            _gameViewPanel.SetEnemyCubeColor(xnaColor);
+                        }
+                        else if (track is SpawnEntityTrack spawnTrack)
                         {
                             var basePos = spawnTrack.PositionMode == PositionMode.Origin ? new Vector3(0, 1, 0)
                                 : spawnTrack.PositionMode == PositionMode.Absolute ? spawnTrack.PositionAbsolute
@@ -1052,11 +1038,8 @@ public class BeatSyncGame : Game
         _trackListPanel.Project = Project;
         _trackListPanel.Selection = Selection;
         _trackListPanel.Input = Input;
-        _trackListPanel.OnDeleteTrackRequested = track =>
-        {
-            _pendingDeleteTrack = track;
-            _optionsDialogPanel.Open("Delete track?", $"Remove '{track.DisplayName}'? This cannot be undone.", new[] { ("Delete", "delete"), ("Cancel", "cancel") });
-        };
+        _trackListPanel.RecordMode = RecordMode;
+        _trackListPanel.OnDeleteTrackRequested = track => RemoveTracksImmediate(new[] { track });
         _transportBar.Project = Project;
         _transportBar.Transport = Transport;
         _transportBar.Input = Input;
@@ -1075,6 +1058,7 @@ public class BeatSyncGame : Game
                 Transport.Play();
                 if (_audio.LoadedFilePath != null)
                 {
+                    _audio.StopOutputOnly();
                     _audio.Seek(Transport.CurrentTime);
                     _audio.Play();
                 }

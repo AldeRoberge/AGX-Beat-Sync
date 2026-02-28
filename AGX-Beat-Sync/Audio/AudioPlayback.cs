@@ -88,6 +88,12 @@ public class AudioPlayback : IDisposable
         _waveOut?.Stop();
     }
 
+    /// <summary>Stop playback and flush output buffers without changing the read position. Use before Seek+Play when resuming after the user moved the playhead while paused, so no stale buffered audio is heard.</summary>
+    public void StopOutputOnly()
+    {
+        _waveOut?.Stop();
+    }
+
     /// <summary>Seek to time in seconds.</summary>
     public void Seek(double seconds)
     {
