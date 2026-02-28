@@ -99,14 +99,13 @@ public static class InspectorDrawer
                 drawBitmap.SetResolution(96, 96);
                 using (var g2 = Graphics.FromImage(drawBitmap))
                 {
-                    g2.Clear(LabelChromaKey);
-                    g2.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-                    g2.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    g2.Clear(System.Drawing.Color.Transparent);
+                    g2.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
                     g2.PageUnit = GraphicsUnit.Pixel;
                     g2.PageScale = 1f;
-                    g2.DrawString(renderText, font, System.Drawing.Brushes.Black, 0, 0);
+                    g2.DrawString(renderText, font, System.Drawing.Brushes.White, 0, 0);
                 }
-                return BitmapChromaKeyToWhiteAlpha(device, drawBitmap, w, h);
+                return BitmapToTexture(device, drawBitmap, w, h);
             }
         }
         catch
@@ -134,13 +133,9 @@ public static class InspectorDrawer
         }
     }
 
-    private static readonly System.Drawing.Color LabelChromaKey = System.Drawing.Color.Magenta;
-
-    /// <summary>Converts black-on-chroma bitmap to white text; chroma and near-white pixels become fully transparent.</summary>
-    private static Texture2D? BitmapChromaKeyToWhiteAlpha(GraphicsDevice device, Bitmap bitmap, int width, int height)
+    /// <summary>Copy bitmap ARGB directly to Texture2D (same approach as TransportBarPanel BPM/timecode).</summary>
+    private static Texture2D? BitmapToTexture(GraphicsDevice device, Bitmap bitmap, int width, int height)
     {
-        // Only treat pure magenta as chroma (don't kill ClearType/anti-aliasing edges).
-        const int LuminanceBackgroundThreshold = 252; // Only near-pure-white = background (avoids killing text edges).
         var data = new Color[width * height];
         var rect = new System.Drawing.Rectangle(0, 0, width, height);
         var bmpData = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
@@ -153,14 +148,9 @@ public static class InspectorDrawer
             {
                 for (int x = 0; x < width; x++)
                 {
-                    int off = y * bmpData.Stride + x * 4;
-                    byte b = rawBytes[off], g = rawBytes[off + 1], r = rawBytes[off + 2];
-                    int lum = (r + g + b) / 3;
-                    bool isChroma = g <= 40 && r >= 200 && b >= 200; // strict: magenta only
-                    bool isBackground = lum >= LuminanceBackgroundThreshold;
-                    byte alpha = (isChroma || isBackground) ? (byte)0 : (byte)(255 - (byte)lum);
                     int i = y * width + x;
-                    data[i] = new Color((byte)255, (byte)255, (byte)255, alpha);
+                    int off = y * bmpData.Stride + x * 4;
+                    data[i] = new Color(rawBytes[off + 2], rawBytes[off + 1], rawBytes[off], rawBytes[off + 3]);
                 }
             }
         }

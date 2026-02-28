@@ -16,6 +16,9 @@ public class SpawnedEntity
     /// <summary>Lifetime in seconds before removal.</summary>
     public float Lifetime { get; set; } = 5f;
 
+    /// <summary>If false, entity is a small cube (stationary); if true, projectile with velocity.</summary>
+    public bool IsProjectile { get; set; } = true;
+
     // Direction pattern (Linear = use Velocity as-is)
     public ProjectileDirectionPattern DirectionPattern { get; set; } = ProjectileDirectionPattern.Linear;
     public Vector3 InitialDirection { get; set; }
@@ -54,12 +57,12 @@ public class GameViewPanel : PanelBase
     /// <summary>Spawn an entity with a world-space direction (normalized or not). Used for pattern bursts.</summary>
     public void SpawnEntityWithDirection(Vector3 position, Vector3 direction, float speed, float lifetime = 5f)
     {
-        SpawnEntityWithDirection(position, direction, speed, lifetime, ProjectileDirectionPattern.Linear, 0f, 0f);
+        SpawnEntityWithDirection(position, direction, speed, lifetime, ProjectileDirectionPattern.Linear, 0f, 0f, isProjectile: true);
     }
 
-    /// <summary>Spawn an entity with optional direction pattern (Oscillation, Orbiting).</summary>
+    /// <summary>Spawn an entity with optional direction pattern (Oscillation, Orbiting). When isProjectile is false (small cube), speed is ignored and entity is stationary.</summary>
     public void SpawnEntityWithDirection(Vector3 position, Vector3 direction, float speed, float lifetime,
-        ProjectileDirectionPattern directionPattern, float oscillationAmplitude, float orbitingDistance)
+        ProjectileDirectionPattern directionPattern, float oscillationAmplitude, float orbitingDistance, bool isProjectile = true)
     {
         var d = direction;
         if (d.LengthSquared() < 1e-8f)
@@ -67,7 +70,9 @@ public class GameViewPanel : PanelBase
         else
             d.Normalize();
 
-        if (directionPattern == ProjectileDirectionPattern.Orbiting && orbitingDistance > 0.001f)
+        float effectiveSpeed = isProjectile ? speed : 0f;
+
+        if (isProjectile && directionPattern == ProjectileDirectionPattern.Orbiting && orbitingDistance > 0.001f)
         {
             var radius = Math.Max(0.001f, orbitingDistance);
             var right = Vector3.Cross(d, Vector3.UnitY);
@@ -80,28 +85,30 @@ public class GameViewPanel : PanelBase
             _spawnedEntities.Add(new SpawnedEntity
             {
                 Position = startPos,
-                Velocity = tangent * speed,
+                Velocity = tangent * effectiveSpeed,
                 SpawnTime = (float)(Transport?.CurrentTime ?? 0),
                 Lifetime = lifetime,
+                IsProjectile = true,
                 DirectionPattern = directionPattern,
-                Speed = speed,
+                Speed = effectiveSpeed,
                 OrbitingDistance = radius,
                 OrbitCenter = position,
                 OrbitRight = right,
                 OrbitTangent = tangent
             });
         }
-        else if (directionPattern == ProjectileDirectionPattern.Oscillation)
+        else if (isProjectile && directionPattern == ProjectileDirectionPattern.Oscillation)
         {
             _spawnedEntities.Add(new SpawnedEntity
             {
                 Position = position,
-                Velocity = d * speed,
+                Velocity = d * effectiveSpeed,
                 SpawnTime = (float)(Transport?.CurrentTime ?? 0),
                 Lifetime = lifetime,
+                IsProjectile = true,
                 DirectionPattern = directionPattern,
                 InitialDirection = d,
-                Speed = speed,
+                Speed = effectiveSpeed,
                 OscillationAmplitude = Math.Abs(oscillationAmplitude)
             });
         }
@@ -110,9 +117,11 @@ public class GameViewPanel : PanelBase
             _spawnedEntities.Add(new SpawnedEntity
             {
                 Position = position,
-                Velocity = d * speed,
+                Velocity = d * effectiveSpeed,
                 SpawnTime = (float)(Transport?.CurrentTime ?? 0),
-                Lifetime = lifetime
+                Lifetime = lifetime,
+                IsProjectile = isProjectile,
+                InitialDirection = d
             });
         }
     }
@@ -147,7 +156,7 @@ public class GameViewPanel : PanelBase
         var content = ContentBounds;
         var viewportRect = new Rectangle(content.X, content.Y, content.Width, Math.Max(0, content.Height));
         if (viewportRect.Contains(mouse))
-            return "Game View — WASD move player. Middle-drag: orbit. Right-drag: FPS camera. Q/E: orbit yaw. Scroll: zoom";
+            return "Game View — WASD move player. Middle-drag: orbit. Q/E: orbit yaw. Scroll: zoom";
         return "Game View";
     }
 
@@ -291,14 +300,27 @@ public class GameViewPanel : PanelBase
             foreach (var e in _spawnedEntities)
             {
                 var dir = e.Velocity;
+                if (dir.LengthSquared() < 1e-8f) dir = e.InitialDirection;
                 if (dir.LengthSquared() < 1e-8f) dir = -Vector3.UnitZ;
                 else dir.Normalize();
                 var rot = RotationFromForward(-Vector3.UnitZ, dir);
-                _effect.World = rot * Matrix.CreateTranslation(e.Position);
-                _effect.CurrentTechnique.Passes[0].Apply();
-                device.SetVertexBuffer(_projectileBuffer);
-                device.Indices = _projectileIndices;
-                device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
+                if (e.IsProjectile)
+                {
+                    _effect.World = rot * Matrix.CreateTranslation(e.Position);
+                    _effect.CurrentTechnique.Passes[0].Apply();
+                    device.SetVertexBuffer(_projectileBuffer);
+                    device.Indices = _projectileIndices;
+                    device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
+                }
+                else
+                {
+                    const float smallCubeScale = 0.25f;
+                    _effect.World = rot * Matrix.CreateScale(smallCubeScale) * Matrix.CreateTranslation(e.Position);
+                    _effect.CurrentTechnique.Passes[0].Apply();
+                    device.SetVertexBuffer(_cubeBuffer);
+                    device.Indices = _cubeIndices;
+                    device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
+                }
             }
         }
 
@@ -398,13 +420,8 @@ public class GameViewPanel : PanelBase
         _camera.Target = _player.Position;
         _camera.HandleInput(Input, viewportRect, dt);
 
-        if (_camera.IsCapturingMouse)
-            _player.SetPosition(_camera.Target); // FPS mode: player follows camera target
-        else
-        {
-            var (forwardXZ, rightXZ) = _camera.GetCameraForwardRightXZ();
-            _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
-        }
+        var (forwardXZ, rightXZ) = _camera.GetCameraForwardRightXZ();
+        _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
 
         float currentTime = (float)(Transport?.CurrentTime ?? 0);
         for (int i = _spawnedEntities.Count - 1; i >= 0; i--)
@@ -416,6 +433,11 @@ public class GameViewPanel : PanelBase
                 continue;
             }
             float elapsed = currentTime - e.SpawnTime;
+            if (!e.IsProjectile)
+            {
+                // Small cube: no movement
+                continue;
+            }
             if (e.DirectionPattern == ProjectileDirectionPattern.Oscillation && e.OscillationAmplitude > 0)
             {
                 float angleRad = (e.OscillationAmplitude * MathF.PI / 180f) * MathF.Sin(elapsed * 4f);

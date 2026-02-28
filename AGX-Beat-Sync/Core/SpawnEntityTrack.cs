@@ -12,6 +12,9 @@ public class SpawnEntityTrack : EventTrackBase
     }
 
     // --- Universal (every spawn event) ---
+    /// <summary>Kind of entity to spawn. Projectiles use Speed; small cubes are stationary.</summary>
+    public SpawnEntityKind EntityKind { get; set; } = SpawnEntityKind.Projectile;
+
     public PositionMode PositionMode { get; set; }
     public Vector3 PositionAbsolute { get; set; }
     public Vector3 PositionRelative { get; set; }

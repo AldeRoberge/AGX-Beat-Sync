@@ -29,6 +29,12 @@ public class SavedSessionState
     /// <summary>Layout: inspector panel width in pixels. 0 = use default (280). Restored on launch.</summary>
     public int InspectorWidthPx { get; set; }
 
+    /// <summary>Window width in pixels. 0 = use default (1280). Restored on launch.</summary>
+    public int WindowWidthPx { get; set; }
+
+    /// <summary>Window height in pixels. 0 = use default (720). Restored on launch.</summary>
+    public int WindowHeightPx { get; set; }
+
     /// <summary>Game view camera: target (player) position. Restored on launch.</summary>
     public float CameraTargetX { get; set; }
     public float CameraTargetY { get; set; } = 0.5f;

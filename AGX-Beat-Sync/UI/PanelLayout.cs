@@ -10,7 +10,7 @@ namespace AGX_Beat_Sync.UI;
 public class PanelLayout
 {
     public const int HeaderBarHeight = 28;
-    public const int TransportHeight = 32;
+    public const int TransportHeight = 36;
     public const int TrackListWidth = 200;
     public const int InspectorWidth = 280;
     public const int MinInspectorWidth = 180;
@@ -22,6 +22,8 @@ public class PanelLayout
     /// <summary>Default height of the bottom row (game view). Game view takes more space by default.</summary>
     public const int DefaultGameViewHeight = 220;
     public const int MinGameViewHeight = 80;
+    public const int MinGameViewWidth = 200;
+    public const int MinEventConsoleWidth = 150;
     public const int MinTimelineHeight = 100;
     /// <summary>Height reserved at top of timeline for in/out strip + playhead strip (panel extends up by this much so tracks are not offset).</summary>
     public const int TimelineStripsHeight = 35;
@@ -32,6 +34,9 @@ public class PanelLayout
 
     /// <summary>Width of the inspector panel in pixels. 0 = use InspectorWidth (280).</summary>
     public int InspectorWidthPx { get; set; }
+
+    /// <summary>Width of the game view panel in pixels (bottom row). 0 = use full width to the left of inspector.</summary>
+    public int GameViewWidthPx { get; set; }
 
     public Rectangle HeaderBar { get; private set; }
     public Rectangle TransportBar { get; private set; }
@@ -45,8 +50,11 @@ public class PanelLayout
     /// <summary>Rectangle to hit-test for dragging the timeline/game view divider (top edge of game view). Spans full bottom row width (game view).</summary>
     public Rectangle DividerGrip => new(0, GameView.Y - DividerGripHalfHeight, GameView.Width, DividerGripHalfHeight * 2);
 
-    /// <summary>Rectangle to hit-test for dragging the timeline / inspector divider (left edge of inspector).</summary>
-    public Rectangle InspectorDividerGrip => new(Inspector.X - InspectorGripHalfWidth, Inspector.Y, InspectorGripHalfWidth * 2, Inspector.Height);
+    /// <summary>Rectangle to hit-test for dragging the timeline / inspector divider (left edge of right column). Spans full column height (inspector + console).</summary>
+    public Rectangle InspectorDividerGrip => new(Inspector.X - InspectorGripHalfWidth, Inspector.Y, InspectorGripHalfWidth * 2, Inspector.Height + EventConsole.Height);
+
+    /// <summary>Rectangle to hit-test for dragging the bottom-row divider between game view and event console. Empty when layout has no such divider.</summary>
+    public Rectangle BottomRowDividerGrip => Rectangle.Empty;
 
     public const int DividerGripHalfHeight = 4;
     public const int InspectorGripHalfWidth = 4;

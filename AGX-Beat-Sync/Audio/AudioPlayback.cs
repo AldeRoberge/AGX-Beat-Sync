@@ -10,6 +10,7 @@ public class AudioPlayback : IDisposable
     private AudioFileReader? _reader;
     private WaveOutEvent? _waveOut;
     private bool _disposed;
+    private bool _suppressPlaybackStopped;
 
     public string? LoadedFilePath { get; private set; }
     public bool IsPlaying => _waveOut?.PlaybackState == PlaybackState.Playing;
@@ -50,7 +51,7 @@ public class AudioPlayback : IDisposable
             _reader = new AudioFileReader(filePath);
             _waveOut = new WaveOutEvent();
             _waveOut.Init(_reader);
-            _waveOut.PlaybackStopped += (_, _) => PlaybackStopped?.Invoke();
+            _waveOut.PlaybackStopped += (_, _) => { if (!_suppressPlaybackStopped) PlaybackStopped?.Invoke(); };
             LoadedFilePath = filePath;
             return true;
         }
@@ -91,7 +92,15 @@ public class AudioPlayback : IDisposable
     /// <summary>Stop playback and flush output buffers without changing the read position. Use before Seek+Play when resuming after the user moved the playhead while paused, so no stale buffered audio is heard.</summary>
     public void StopOutputOnly()
     {
-        _waveOut?.Stop();
+        _suppressPlaybackStopped = true;
+        try
+        {
+            _waveOut?.Stop();
+        }
+        finally
+        {
+            _suppressPlaybackStopped = false;
+        }
     }
 
     /// <summary>Seek to time in seconds.</summary>

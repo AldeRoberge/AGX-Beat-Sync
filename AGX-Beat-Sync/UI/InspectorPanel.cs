@@ -18,8 +18,6 @@ public class InspectorPanel : PanelBase
     private int _contentHeight; // height of renderer body only (below fixed header/name/type)
     private bool _scrollbarThumbDragging;
     private IEventTrack? _lastSelectedTrack;
-    private static readonly RasterizerState ScissorRasterizer = new() { ScissorTestEnable = true, CullMode = CullMode.None };
-
     public EditorSelection? Selection { get; set; }
     public InputManager? Input { get; set; }
     public Project? Project { get; set; }
@@ -247,14 +245,9 @@ public class InspectorPanel : PanelBase
             {
                 int fixedTop = InspectorHeaderHeight + NameRowHeight + TrackTypeRowHeight;
 
-                spriteBatch.End();
-                var gd = spriteBatch.GraphicsDevice;
-                int backBufferW = gd.PresentationParameters.BackBufferWidth;
-                int backBufferH = gd.PresentationParameters.BackBufferHeight;
-                gd.ScissorRectangle = content;
-
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, ScissorRasterizer, null, Matrix.Identity);
+                // Draw everything in the current batch (no scissor). End/Begin/scissor was causing a black square on some setups.
                 DrawPanelBackground(spriteBatch);
+                var gd = spriteBatch.GraphicsDevice;
 
                 // Header, name, track type (all scroll with _scrollY)
                 string headerTitle = Selection.SelectedEventTime.HasValue ? "Inspector: Note" : "Inspector: Track";
@@ -284,9 +277,6 @@ public class InspectorPanel : PanelBase
                 renderer.Draw(spriteBatch, bodyArea, Selection.SelectedEventTrack, Input, ref cursorY, Selection);
                 _contentHeight = Math.Max(0, cursorY - (contentArea.Y + fixedTop));
 
-                spriteBatch.End();
-                gd.ScissorRectangle = new Rectangle(0, 0, backBufferW, backBufferH);
-
                 // Dropdown on top (drawn in screen space, same scroll)
                 if (_trackTypeDropdownOpen && types.Count > 0)
                 {
@@ -295,10 +285,8 @@ public class InspectorPanel : PanelBase
                     {
                         if (types[i].TrackTypeId == Selection.SelectedEventTrack.TrackTypeId) { selectedIdx = i; break; }
                     }
-                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
                     var optionNames = types.Select(t => t.DisplayName).ToArray();
                     (_, _trackTypeOptionRects) = InspectorDrawer.DrawDropdownList(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeCursorY, contentArea.Width - InspectorDrawer.Padding * 2, optionNames, selectedIdx, ref trackTypeCursorY, Input.MousePosition);
-                    spriteBatch.End();
                 }
 
                 // Clamp scroll to updated total content height
@@ -309,7 +297,6 @@ public class InspectorPanel : PanelBase
                 // Scrollbar when content overflows
                 if (totalContentHeight > contentArea.Height)
                 {
-                    spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
                     var scrollbar = GetScrollbarBounds(content);
                     spriteBatch.Draw(pixel, scrollbar, new Color(45, 48, 55));
                     var thumb = GetScrollbarThumbBounds(content, contentArea.Height, totalContentHeight);
@@ -323,11 +310,7 @@ public class InspectorPanel : PanelBase
                         spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY - 2, gripW, 1), gripColor);
                         spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY + 2, gripW, 1), gripColor);
                     }
-                    spriteBatch.End();
                 }
-
-                // Leave batch active for subsequent panels
-                spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
             }
             else
             {

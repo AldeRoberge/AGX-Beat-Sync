@@ -27,6 +27,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private bool _positionExpanded = true;
     private bool _rotationExpanded = true;
     private bool _advancedExpanded;
+    private bool _entityKindDropdownOpen;
     private bool _positionDropdownOpen;
     private bool _rotationDropdownOpen;
     private bool _modeDropdownOpen;
@@ -47,6 +48,9 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private Rectangle[] _positionModeOptionRects = Array.Empty<Rectangle>();
     private Rectangle _rotationDropdownRect;
     private Rectangle[] _rotationModeOptionRects = Array.Empty<Rectangle>();
+    private Rectangle _entityKindValueRect;
+    private Rectangle _entityKindDropdownRect;
+    private Rectangle[] _entityKindOptionRects = Array.Empty<Rectangle>();
     private Rectangle _modeValueRect;
     private Rectangle _modeDropdownRect;
     private Rectangle[] _modeOptionRects = Array.Empty<Rectangle>();
@@ -69,6 +73,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private Rectangle[] _positionValueRects = Array.Empty<Rectangle>();
     private Rectangle[] _rotationValueRects = Array.Empty<Rectangle>();
 
+    private static readonly string[] SpawnEntityKindOptions = Enum.GetNames<SpawnEntityKind>();
     private static readonly string[] PositionModeOptions = Enum.GetNames<PositionMode>();
     private static readonly string[] RotationModeOptions = Enum.GetNames<RotationMode>();
     private static readonly string[] SpawnModeOptions = Enum.GetNames<SpawnMode>();
@@ -110,6 +115,19 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         y = cursorY;
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
+
+        // Entity type: SmallCube | Projectile
+        string entityKindText = t.EntityKind.ToString();
+        _entityKindValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Entity", entityKindText, ref cursorY);
+        y = cursorY;
+        if (_entityKindDropdownOpen)
+        {
+            int selected = (int)t.EntityKind;
+            (_entityKindDropdownRect, _entityKindOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnEntityKindOptions, selected, ref cursorY, input.MousePosition);
+            y = cursorY;
+        }
+        else
+            _entityKindOptionRects = Array.Empty<Rectangle>();
 
         // Mode: Single | Multiple
         string modeText = t.SpawnMode.ToString();
@@ -300,45 +318,61 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
 
-        // Speed, Lifetime (universal)
-        string speedText = _focusedField == InspectorNumberField.Speed ? _editText : t.Speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        bool speedCursorVisible = _focusedField == InspectorNumberField.Speed && (Environment.TickCount64 / 500) % 2 == 0;
-        _speedValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, ref cursorY, showCaret: speedCursorVisible);
-        y = cursorY;
+        // Speed (only for Projectile), Lifetime (universal)
+        if (t.EntityKind == SpawnEntityKind.Projectile)
+        {
+            string speedText = _focusedField == InspectorNumberField.Speed ? _editText : t.Speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            bool speedCursorVisible = _focusedField == InspectorNumberField.Speed && (Environment.TickCount64 / 500) % 2 == 0;
+            _speedValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, ref cursorY, showCaret: speedCursorVisible);
+            y = cursorY;
+        }
+        else
+            _speedValueRect = default;
         string lifetimeText = _focusedField == InspectorNumberField.Lifetime ? _editText : t.Lifetime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         bool lifetimeCursorVisible = _focusedField == InspectorNumberField.Lifetime && (Environment.TickCount64 / 500) % 2 == 0;
         _lifetimeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Lifetime", lifetimeText, ref cursorY, showCaret: lifetimeCursorVisible);
         y = cursorY;
 
-        // Direction pattern (projectile movement)
-        string directionPatternText = t.DirectionPattern.ToString();
-        _directionPatternValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Direction", directionPatternText, ref cursorY);
-        y = cursorY;
-        if (_directionPatternDropdownOpen)
+        // Direction pattern (projectile movement only)
+        if (t.EntityKind == SpawnEntityKind.Projectile)
         {
-            int selected = (int)t.DirectionPattern;
-            (_directionPatternDropdownRect, _directionPatternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ProjectileDirectionPatternOptions, selected, ref cursorY, input.MousePosition);
+            string directionPatternText = t.DirectionPattern.ToString();
+            _directionPatternValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Direction", directionPatternText, ref cursorY);
             y = cursorY;
-        }
-        else
-            _directionPatternOptionRects = Array.Empty<Rectangle>();
+            if (_directionPatternDropdownOpen)
+            {
+                int selected = (int)t.DirectionPattern;
+                (_directionPatternDropdownRect, _directionPatternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ProjectileDirectionPatternOptions, selected, ref cursorY, input.MousePosition);
+                y = cursorY;
+            }
+            else
+                _directionPatternOptionRects = Array.Empty<Rectangle>();
 
-        if (t.DirectionPattern == ProjectileDirectionPattern.Oscillation)
-        {
-            string ampText = _focusedField == InspectorNumberField.OscillationAmplitude ? _editText : t.OscillationAmplitude.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-            _oscillationAmplitudeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Amplitude (°)", ampText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && (Environment.TickCount64 / 500) % 2 == 0);
-            y = cursorY;
-            _orbitingDistanceValueRect = default;
-        }
-        else if (t.DirectionPattern == ProjectileDirectionPattern.Orbiting)
-        {
-            _oscillationAmplitudeValueRect = default;
-            string distText = _focusedField == InspectorNumberField.OrbitingDistance ? _editText : t.OrbitingDistance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-            _orbitingDistanceValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Distance", distText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && (Environment.TickCount64 / 500) % 2 == 0);
-            y = cursorY;
+            if (t.DirectionPattern == ProjectileDirectionPattern.Oscillation)
+            {
+                string ampText = _focusedField == InspectorNumberField.OscillationAmplitude ? _editText : t.OscillationAmplitude.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _oscillationAmplitudeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Amplitude (°)", ampText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+                _orbitingDistanceValueRect = default;
+            }
+            else if (t.DirectionPattern == ProjectileDirectionPattern.Orbiting)
+            {
+                _oscillationAmplitudeValueRect = default;
+                string distText = _focusedField == InspectorNumberField.OrbitingDistance ? _editText : t.OrbitingDistance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _orbitingDistanceValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Distance", distText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+            }
+            else
+            {
+                _oscillationAmplitudeValueRect = default;
+                _orbitingDistanceValueRect = default;
+            }
         }
         else
         {
+            _directionPatternValueRect = default;
+            _directionPatternDropdownRect = default;
+            _directionPatternOptionRects = Array.Empty<Rectangle>();
             _oscillationAmplitudeValueRect = default;
             _orbitingDistanceValueRect = default;
         }
@@ -453,6 +487,26 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         if (!insideContent)
             return;
 
+        // Entity kind dropdown
+        if (_entityKindDropdownOpen)
+        {
+            if (_entityKindDropdownRect.Contains(pt))
+            {
+                for (int i = 0; i < _entityKindOptionRects.Length; i++)
+                {
+                    if (_entityKindOptionRects[i].Contains(pt))
+                    {
+                        t.EntityKind = (SpawnEntityKind)i;
+                        _entityKindDropdownOpen = false;
+                        return;
+                    }
+                }
+            }
+            else
+                _entityKindDropdownOpen = false;
+            return;
+        }
+
         // Click on a number field to start editing
         var fieldAt = GetNumberFieldAt(pt);
         if (fieldAt != InspectorNumberField.None)
@@ -546,6 +600,17 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             return;
         }
 
+        if (!_entityKindDropdownOpen && _entityKindValueRect != default && _entityKindValueRect.Contains(pt))
+        {
+            _entityKindDropdownOpen = true;
+            _positionDropdownOpen = false;
+            _rotationDropdownOpen = false;
+            _modeDropdownOpen = false;
+            _patternDropdownOpen = false;
+            _directionPatternDropdownOpen = false;
+            return;
+        }
+
         if (!_modeDropdownOpen && _modeValueRect.Contains(pt))
         {
             _modeDropdownOpen = true;
@@ -553,6 +618,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _rotationDropdownOpen = false;
             _patternDropdownOpen = false;
             _directionPatternDropdownOpen = false;
+            _entityKindDropdownOpen = false;
             return;
         }
 
@@ -563,16 +629,18 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _rotationDropdownOpen = false;
             _modeDropdownOpen = false;
             _directionPatternDropdownOpen = false;
+            _entityKindDropdownOpen = false;
             return;
         }
 
-        if (!_directionPatternDropdownOpen && _directionPatternValueRect != default && _directionPatternValueRect.Contains(pt))
+        if (t.EntityKind == SpawnEntityKind.Projectile && !_directionPatternDropdownOpen && _directionPatternValueRect != default && _directionPatternValueRect.Contains(pt))
         {
             _directionPatternDropdownOpen = true;
             _positionDropdownOpen = false;
             _rotationDropdownOpen = false;
             _modeDropdownOpen = false;
             _patternDropdownOpen = false;
+            _entityKindDropdownOpen = false;
             return;
         }
 
@@ -622,6 +690,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _positionDropdownOpen = true;
             _rotationDropdownOpen = false;
             _directionPatternDropdownOpen = false;
+            _entityKindDropdownOpen = false;
             return;
         }
 
@@ -631,6 +700,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             _rotationDropdownOpen = true;
             _positionDropdownOpen = false;
             _directionPatternDropdownOpen = false;
+            _entityKindDropdownOpen = false;
         }
     }
 

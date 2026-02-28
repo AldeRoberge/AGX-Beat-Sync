@@ -119,6 +119,8 @@ public class TimelinePanel : PanelBase
     private static readonly Color NoteSelectedFillTop = new(255, 255, 255);
     private static readonly Color NoteSelectedFillBottom = new(252, 252, 252);
     private static readonly Color NoteSelectedBorder = new(255, 255, 255);
+    /// <summary>Outer ring drawn around selected notes so selection is obvious.</summary>
+    private static readonly Color NoteSelectionOutline = new(255, 255, 255);
     private static readonly Color NoteResizeHandle = new(255, 255, 255);
 
     /// <summary>Note texture: rounded rect with large corner radius so it reads clearly when scaled (pill shape).</summary>
@@ -982,9 +984,21 @@ public class TimelinePanel : PanelBase
                 ViewState.ViewStartTime = Math.Max(0, total - visibleDuration);
             }
 
-            // Right click: delete event time if on a block, otherwise seek and start right-drag seeking
+            // Right click: remove in/out in strip, delete event time if on a block, otherwise seek and start right-drag seeking
             if (Input.MouseRightPressed && Transport != null && ViewState != null)
             {
+                if (GetInOutStripBounds(content).Contains(Input.MousePosition) && Project != null)
+                {
+                    if (CommandStack != null)
+                        CommandStack.Execute(new SetInOutCommand(Project, null, null));
+                    else
+                    {
+                        Project.InTime = null;
+                        Project.OutTime = null;
+                    }
+                }
+                else
+                {
                 var trackArea = GetTrackContentBounds(content);
                 if (trackArea.Contains(Input.MousePosition) && Project?.EventTracks.Count > 0)
                 {
@@ -1015,6 +1029,7 @@ public class TimelinePanel : PanelBase
                     else
                         Transport.Seek(time);
                     _rightDragSeeking = true;
+                }
                 }
             }
 
@@ -1501,11 +1516,14 @@ public class TimelinePanel : PanelBase
                     int h = LaneHeight - 4;
                     int blockW = (int)Math.Max(2, w);
                     bool selected = Selection != null && Selection.IsNoteSelected(track, eventTime);
-                    Color fillTint = selected ? Lighten(trackColor, 1.1f) : trackColor;
-                    Color selBorderTint = selected ? Lighten(borderTint, 1.1f) : borderTint;
+                    Color fillTint = selected ? Lighten(trackColor, 1.35f) : trackColor;
+                    Color selBorderTint = selected ? NoteSelectionOutline : borderTint;
                     fillTex = selected ? s_noteSelectedFillTexture : s_noteFillTexture;
                     borderTex = selected ? s_noteSelectedBorderTexture : s_noteBorderTexture;
                     int x = (int)fx;
+                    // Selected: draw outer white outline first so selection is obvious
+                    if (selected)
+                        DrawRoundedRect9Slice(spriteBatch, borderTex, x - 2, y - 2, blockW + 4, h + 4, NoteSelectionOutline);
                     // FL Studio style: 9-slice rounded rect so corners stay perfectly circular at any note size (pill-shaped ends when long)
                     DrawRoundedRect9Slice(spriteBatch, borderTex, x - 1, y - 1, blockW + 2, h + 2, selBorderTint);
                     DrawRoundedRect9Slice(spriteBatch, fillTex, x, y, blockW, h, fillTint);
@@ -1643,7 +1661,7 @@ public class TimelinePanel : PanelBase
             int thumbY = scrollbar.Y + (range > 0 ? (int)(_laneScrollOffset / range * (scrollbar.Height - thumbHeight)) : 0);
             var thumb = new Rectangle(scrollbar.X + 2, thumbY, scrollbar.Width - 4, thumbHeight);
             spriteBatch.Draw(pixel, thumb, new Color(90, 95, 105));
-            // Gizmo: center grip to show thumb is grabbable (like in/out region)
+            // Grip: two lines to show thumb is grabbable
             if (thumbHeight >= 10)
             {
                 var gripColor = new Color(45, 50, 58);
@@ -1675,7 +1693,7 @@ public class TimelinePanel : PanelBase
                 spriteBatch.Draw(pixel, new Rectangle(rightX - 3, gripTop, 1, gripH), gripColor);
                 spriteBatch.Draw(pixel, new Rectangle(rightX, gripTop, 1, gripH), gripColor);
             }
-            // Center grip: show thumb is grabbable to move (like in/out region)
+            // Center grip: two lines to show thumb is grabbable to move
             if (hThumb.Width >= 12)
             {
                 int centerX = hThumb.X + hThumb.Width / 2;
