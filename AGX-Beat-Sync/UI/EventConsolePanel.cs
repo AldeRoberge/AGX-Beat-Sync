@@ -9,6 +9,17 @@ using Microsoft.Xna.Framework.Input;
 
 namespace AGX_Beat_Sync.UI;
 
+/// <summary>Minimum level for engine log display (show this level and above).</summary>
+public enum EngineLogLevelFilter
+{
+    Verbose,
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal
+}
+
 /// <summary>
 /// Console panel: Engine logs (ILogger) and timeline Events. Toggle "Engine" / "Events" to filter.
 /// </summary>
@@ -17,6 +28,8 @@ public class EventConsolePanel : PanelBase
     private const int LineHeight = 18;
     private const int Padding = 6;
     private const int ScrollbarWidth = 10;
+    private const int ShortcutsLineHeight = 16;
+    private const string ShortcutsText = "Ctrl+Z Undo  Ctrl+Shift+Z Redo  Ctrl+C Copy  Ctrl+X Cut  Ctrl+A Select all";
     private const int MinScrollbarThumbHeight = 20;
     private const int MaxLogEntries = 500;
     private const int HeaderToggleHeight = 20;
@@ -32,12 +45,18 @@ public class EventConsolePanel : PanelBase
     private int _thumbDragStartY;
     private int _scrollStartY;
     private int _selectedIndex = -1;
+    private bool _selectAll;
     private volatile bool _userAtBottom = true;
 
     /// <summary>When true, engine logs (ILogger) are shown in the console.</summary>
     public bool ShowEngine { get; set; } = true;
     /// <summary>When true, timeline events (e.g. Spawn Entity) are shown.</summary>
     public bool ShowEvents { get; set; } = true;
+    /// <summary>Minimum engine log level to show (e.g. Info = show Info, Warning, Error, Fatal).</summary>
+    public EngineLogLevelFilter EngineMinLogLevel { get; set; } = EngineLogLevelFilter.Info;
+
+    private bool _levelDropdownOpen;
+    private static readonly string[] LevelFilterOptionLabels = { "All", "DBG", "INF", "WRN", "ERR", "FTL" };
 
     // Combined lines for selection/copy: (display text, color, isEvent, eventIndex or -1). Rebuilt each frame from toggles.
     private readonly List<(string Text, Color Color, bool IsEvent, int EventIndex)> _displayLines = new();
@@ -79,13 +98,24 @@ public class EventConsolePanel : PanelBase
             EngineLogs.Clear();
         _scrollY = 0;
         _selectedIndex = -1;
+        _selectAll = false;
         _userAtBottom = true;
     }
 
-    /// <summary>Copy the selected log entry to the clipboard. Returns true if something was copied.</summary>
+    /// <summary>Copy the selected log entry (or all if Select All was used) to the clipboard. Returns true if something was copied.</summary>
     public bool CopySelectionToClipboard()
     {
         EnsureDisplayLines();
+        if (_selectAll && _displayLines.Count > 0)
+        {
+            _selectAll = false;
+            try
+            {
+                Clipboard.SetText(string.Join("\r\n", System.Linq.Enumerable.Select(_displayLines, d => d.Text)));
+                return true;
+            }
+            catch { return false; }
+        }
         if (_selectedIndex < 0 || _selectedIndex >= _displayLines.Count) return false;
         string toCopy = _displayLines[_selectedIndex].Text;
         if (string.IsNullOrEmpty(toCopy)) return false;
@@ -95,6 +125,12 @@ public class EventConsolePanel : PanelBase
             return true;
         }
         catch { return false; }
+    }
+
+    /// <summary>Select all console lines; next Copy will copy entire content.</summary>
+    public void SelectAll()
+    {
+        _selectAll = true;
     }
 
     /// <summary>Remove the selected log entry (Events only). Returns true if an entry was removed.</summary>
@@ -129,6 +165,7 @@ public class EventConsolePanel : PanelBase
 
         foreach (var e in engineSnapshot)
         {
+            if (!PassesLevelFilter(e.Level, EngineMinLogLevel)) continue;
             string text = $"{e.TimeString} | [{e.Level}] {e.Message}";
             Color color = LevelColor(e.Level);
             _displayLines.Add((text, color, false, -1));
@@ -137,6 +174,35 @@ public class EventConsolePanel : PanelBase
         {
             _displayLines.Add((eventSnapshot[i], new Color(200, 210, 220), true, i));
         }
+    }
+
+    private static int LevelOrder(string level)
+    {
+        return level switch { "VRB" => 0, "DBG" => 1, "INF" => 2, "WRN" => 3, "ERR" => 4, "FTL" => 5, _ => 2 };
+    }
+
+    private static int LevelOrder(EngineLogLevelFilter filter)
+    {
+        return (int)filter;
+    }
+
+    private static bool PassesLevelFilter(string level, EngineLogLevelFilter minLevel)
+    {
+        return LevelOrder(level) >= LevelOrder(minLevel);
+    }
+
+    private static string LevelFilterLabel(EngineLogLevelFilter filter)
+    {
+        return filter switch
+        {
+            EngineLogLevelFilter.Verbose => "All",
+            EngineLogLevelFilter.Debug => "DBG",
+            EngineLogLevelFilter.Info => "INF",
+            EngineLogLevelFilter.Warning => "WRN",
+            EngineLogLevelFilter.Error => "ERR",
+            EngineLogLevelFilter.Fatal => "FTL",
+            _ => "INF"
+        };
     }
 
     private static Color LevelColor(string level)
@@ -160,24 +226,65 @@ public class EventConsolePanel : PanelBase
         EnsureDisplayLines();
         var content = ContentBounds;
         int contentWidth = Math.Max(0, content.Width - ScrollbarWidth);
-        int visibleHeight = content.Height;
+        int logVisibleHeight = content.Height - ShortcutsLineHeight;
+        var logContentRect = new Rectangle(content.X, content.Y + ShortcutsLineHeight, content.Width, logVisibleHeight);
         _contentHeight = _displayLines.Count * LineHeight;
 
-        int maxScroll = Math.Max(0, _contentHeight - visibleHeight);
+        int maxScroll = Math.Max(0, _contentHeight - logVisibleHeight);
         _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
 
-        // Header toggle hit-test
+        // Header toggle hit-test (same rects as drawn in DrawPanelBackground)
         var header = HeaderBounds;
         int toggleY = header.Y + (header.Height - HeaderToggleHeight) / 2;
         int right = header.Right - HeaderTogglePadding;
-        int engineRight = right - ToggleChipPaddingH * 2 - 44;
-        int eventsRight = right - ToggleChipPaddingH * 2 - 28;
-        var engineToggleRect = new Rectangle(engineRight - 52, toggleY, 52, HeaderToggleHeight);
-        var eventsToggleRect = new Rectangle(eventsRight - 44, toggleY, 44, HeaderToggleHeight);
+        int levelChipW = 36 + ToggleChipPaddingH * 2; // "All" / "WRN" etc.
+        int xEvents = right - (ToggleChipPaddingH + 44);
+        int xEngine = xEvents - (ToggleChipPaddingH + 52 + 4);
+        int xLevel = xEngine - (levelChipW + 4);
+        var eventsToggleRect = new Rectangle(xEvents, toggleY, 44 + ToggleChipPaddingH * 2, HeaderToggleHeight);
+        var engineToggleRect = new Rectangle(xEngine, toggleY, 52 + ToggleChipPaddingH * 2, HeaderToggleHeight);
+        var levelToggleRect = new Rectangle(xLevel, toggleY, levelChipW, HeaderToggleHeight);
 
-        if (Input.MouseLeftPressed && header.Contains(Input.MousePosition))
+        // Level dropdown: when open, handle option click or click-outside to close first
+        int dropdownH = LevelFilterOptionLabels.Length * InspectorDrawer.RowHeight;
+        var levelDropdownRect = new Rectangle(xLevel, toggleY + HeaderToggleHeight + 2, levelChipW, dropdownH);
+        if (_levelDropdownOpen && Input.MouseLeftPressed)
         {
-            if (engineToggleRect.Contains(Input.MousePosition))
+            bool hitOption = false;
+            for (int i = 0; i < LevelFilterOptionLabels.Length; i++)
+            {
+                var rowRect = new Rectangle(levelDropdownRect.X, levelDropdownRect.Y + i * InspectorDrawer.RowHeight, levelDropdownRect.Width, InspectorDrawer.RowHeight);
+                if (rowRect.Contains(Input.MousePosition))
+                {
+                    EngineMinLogLevel = (EngineLogLevelFilter)i;
+                    _levelDropdownOpen = false;
+                    hitOption = true;
+                    break;
+                }
+            }
+            if (!hitOption)
+            {
+                if (levelToggleRect.Contains(Input.MousePosition))
+                    _levelDropdownOpen = false;
+                else if (engineToggleRect.Contains(Input.MousePosition))
+                {
+                    ShowEngine = !ShowEngine;
+                    _levelDropdownOpen = false;
+                }
+                else if (eventsToggleRect.Contains(Input.MousePosition))
+                {
+                    ShowEvents = !ShowEvents;
+                    _levelDropdownOpen = false;
+                }
+                else if (!levelDropdownRect.Contains(Input.MousePosition) && ContainsPoint(Input.MousePosition))
+                    _levelDropdownOpen = false;
+            }
+        }
+        else if (Input.MouseLeftPressed && header.Contains(Input.MousePosition))
+        {
+            if (levelToggleRect.Contains(Input.MousePosition))
+                _levelDropdownOpen = !_levelDropdownOpen;
+            else if (engineToggleRect.Contains(Input.MousePosition))
                 ShowEngine = !ShowEngine;
             else if (eventsToggleRect.Contains(Input.MousePosition))
                 ShowEvents = !ShowEvents;
@@ -187,8 +294,8 @@ public class EventConsolePanel : PanelBase
         {
             if (Input.MouseLeftDown)
             {
-                var scrollbar = GetScrollbarBounds(content);
-                int thumbHeight = GetThumbHeight(content);
+                var scrollbar = GetScrollbarBounds(logContentRect);
+                int thumbHeight = GetThumbHeight(logContentRect);
                 int travel = scrollbar.Height - thumbHeight;
                 if (travel > 0 && maxScroll > 0)
                 {
@@ -209,7 +316,7 @@ public class EventConsolePanel : PanelBase
             }
             if (Input.MouseLeftPressed)
             {
-                var scrollbar = GetScrollbarBounds(content);
+                var scrollbar = GetScrollbarBounds(logContentRect);
                 if (scrollbar.Contains(Input.MousePosition))
                 {
                     _scrollbarThumbDragging = true;
@@ -218,12 +325,14 @@ public class EventConsolePanel : PanelBase
                 }
                 else
                 {
-                    var logArea = new Rectangle(content.X, content.Y, contentWidth, content.Height);
-                    if (logArea.Contains(Input.MousePosition))
+                    if (logContentRect.Contains(Input.MousePosition))
                     {
-                        int lineIndex = (Input.MousePosition.Y - content.Y + _scrollY) / LineHeight;
+                        int lineIndex = (Input.MousePosition.Y - logContentRect.Y + _scrollY) / LineHeight;
                         if (lineIndex >= 0 && lineIndex < _displayLines.Count)
+                        {
                             _selectedIndex = lineIndex;
+                            _selectAll = false;
+                        }
                         else
                             _selectedIndex = -1;
                     }
@@ -263,6 +372,7 @@ public class EventConsolePanel : PanelBase
         int toggleY = header.Y + (header.Height - HeaderToggleHeight) / 2;
         int right = header.Right - HeaderTogglePadding;
         int x = right;
+        int levelChipW = 36 + ToggleChipPaddingH * 2;
 
         x -= ToggleChipPaddingH + 44;
         var eventsRect = new Rectangle(x, toggleY, 44 + ToggleChipPaddingH * 2, HeaderToggleHeight);
@@ -277,6 +387,26 @@ public class EventConsolePanel : PanelBase
         Color engineBg = engineOn ? new Color(70, 130, 100) : new Color(55, 58, 65);
         spriteBatch.Draw(pixel, engineRect, engineBg);
         InspectorDrawer.DrawLabel(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, "Engine", pixel, engineOn ? new Color(255, 255, 255) : new Color(160, 165, 175));
+
+        x -= levelChipW + 4;
+        var levelRect = new Rectangle(x, toggleY, levelChipW, HeaderToggleHeight);
+        string levelLabel = LevelFilterLabel(EngineMinLogLevel);
+        Color levelBg = new Color(55, 60, 68);
+        spriteBatch.Draw(pixel, levelRect, levelBg);
+        InspectorDrawer.DrawLabel(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, levelLabel, pixel, new Color(190, 195, 200));
+        // Dropdown arrow on level chip
+        int ax = levelRect.Right - 8;
+        int ay = levelRect.Y + levelRect.Height / 2;
+        for (int i = -3; i <= 3; i++)
+            for (int j = 0; j <= 4 - Math.Abs(i); j++)
+                spriteBatch.Draw(pixel, new Rectangle(ax + i, ay - 2 + j, 1, 1), InspectorDrawer.FoldoutArrow);
+        if (_levelDropdownOpen)
+        {
+            int dropdownY = levelRect.Bottom + 2;
+            int dropdownW = levelRect.Width;
+            int cursorY = dropdownY;
+            InspectorDrawer.DrawDropdownList(spriteBatch, pixel, device, levelRect.X, dropdownY, dropdownW, LevelFilterOptionLabels, (int)EngineMinLogLevel, ref cursorY, Input?.MousePosition);
+        }
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)
@@ -285,7 +415,11 @@ public class EventConsolePanel : PanelBase
         var pixel = GetPixelTexture(spriteBatch.GraphicsDevice);
         var device = spriteBatch.GraphicsDevice;
         int contentWidth = Math.Max(0, content.Width - ScrollbarWidth);
-        var logArea = new Rectangle(content.X, content.Y, contentWidth, content.Height);
+        int logAreaTop = content.Y + ShortcutsLineHeight;
+        var logArea = new Rectangle(content.X, logAreaTop, contentWidth, content.Height - ShortcutsLineHeight);
+
+        // Shortcuts line at top of content (always visible)
+        InspectorDrawer.DrawLabel(spriteBatch, device, content.X + Padding, content.Y + 2, ShortcutsText, pixel, new Color(100, 105, 112));
 
         EnsureDisplayLines();
 
@@ -305,11 +439,11 @@ public class EventConsolePanel : PanelBase
         int logAreaWidth = Math.Max(0, content.Width - ScrollbarWidth);
         int selectedIndex = _selectedIndex;
 
-        int y = content.Y - _scrollY;
+        int y = logAreaTop - _scrollY;
         for (int i = 0; i < _displayLines.Count; i++)
         {
             int lineBottom = y + LineHeight;
-            if (lineBottom > content.Y && y < content.Bottom)
+            if (lineBottom > logAreaTop && y < content.Bottom)
             {
                 if (i == selectedIndex)
                 {
@@ -322,11 +456,13 @@ public class EventConsolePanel : PanelBase
             y = lineBottom;
         }
 
-        if (_contentHeight > content.Height && content.Width > ScrollbarWidth)
+        int logVisibleHeight = content.Height - ShortcutsLineHeight;
+        var logContentRect = new Rectangle(content.X, logAreaTop, content.Width, logVisibleHeight);
+        if (_contentHeight > logVisibleHeight && content.Width > ScrollbarWidth)
         {
-            var scrollbar = GetScrollbarBounds(content);
+            var scrollbar = GetScrollbarBounds(logContentRect);
             spriteBatch.Draw(pixel, scrollbar, new Color(42, 45, 50));
-            var thumb = GetThumbBounds(content, Math.Max(0, _contentHeight - content.Height));
+            var thumb = GetThumbBounds(logContentRect, Math.Max(0, _contentHeight - logVisibleHeight));
             spriteBatch.Draw(pixel, thumb, new Color(65, 70, 78));
             if (thumb.Height >= 10)
             {

@@ -41,6 +41,11 @@ public class BeatSyncGame : Game
     private HeaderBarPanel _headerBarPanel = null!;
     private EventTrackBase? _pendingDeleteTrack;
     private List<EventTrackBase>? _pendingDeleteTracks;
+    /// <summary>Edit shortcut from KeyDown, processed next Update() so it works when OS consumes the key before poll.</summary>
+    private Keys _pendingEditShortcutKey = Keys.None;
+    private bool _pendingEditShortcutShift;
+    private bool _pendingEditShortcutQueued;
+    private readonly object _pendingShortcutLock = new();
 
     public Project Project { get; }
     public Transport Transport { get; }
@@ -76,9 +81,12 @@ public class BeatSyncGame : Game
     /// <summary>Fired (trackIndex, eventTime) so we don't double-fire when playback crosses an event time.</summary>
     private readonly HashSet<(int trackIndex, double eventTime)> _eventFiredSet = new();
     private double _lastPlaybackTime = -1;
+    private readonly Metronome _metronome = new();
 
     /// <summary>When true, pressing 1-9/0 while playing adds an event at current time to the corresponding track (1=first track, 0=10th). Toggle with R.</summary>
     private bool _recordMode;
+    /// <summary>When true, metronome plays tock on beat 1 and tick on beats 2–4 while playing.</summary>
+    private bool _metronomeEnabled;
 
     /// <summary>When set, next Update shows "Saved to ..." in the status bar for a few seconds.</summary>
     private string? _pendingSavedPath;
@@ -92,6 +100,9 @@ public class BeatSyncGame : Game
     private bool _inspectorResizeDragging;
     private int _inspectorResizeStartX;
     private int _inspectorResizeStartWidth;
+    private bool _bottomRowResizeDragging;
+    private int _bottomRowResizeStartX;
+    private int _bottomRowResizeStartWidth;
 
     // CPU / Memory metrics (top right of whole view)
     private const int MetricsMargin = 8;
@@ -320,6 +331,8 @@ public class BeatSyncGame : Game
         InspectorRendererRegistry.Register("SFX", new SfxInspectorRenderer());
         EventTrackRegistry.Register(new EventTrackDescriptor("ChangeEntityColor", "Change Entity Color", () => new ChangeEntityColorTrack()));
         InspectorRendererRegistry.Register("ChangeEntityColor", new ChangeEntityColorInspectorRenderer());
+        EventTrackRegistry.Register(new EventTrackDescriptor("Screenshake", "Screenshake", () => new ScreenshakeTrack()));
+        InspectorRendererRegistry.Register("Screenshake", new ScreenshakeInspectorRenderer());
 
         _audio.PlaybackStopped += () =>
         {
@@ -387,13 +400,12 @@ public class BeatSyncGame : Game
         }
     }
 
-    /// <summary>Track key in KeyDown so merged keyboard state is correct. Edit shortcuts (Ctrl+Z/Y/C/X/V) are also handled here so they fire when the OS delivers the key event; Update() handles the rest.</summary>
+    /// <summary>Track key in KeyDown and queue Ctrl+Z/Y/C/X/V/A so they are processed next Update() (key often gone by next poll when OS handles it).</summary>
     private void OnKeyDown(object? sender, InputKeyEventArgs e)
     {
         if (e.Key == Keys.None) return;
         Input.OnKeyDown(e.Key);
 
-        // Edit shortcuts in KeyDown so they work when OS/SDL delivers the event (Ctrl+Z/C/X/V are often consumed before next poll)
         bool dialogsClosed = !_openDialogPanel.IsVisible && !_optionsDialogPanel.IsVisible;
         if (!dialogsClosed) return;
         var (ctrl, shift) = InputManager.GetModifierKeysDown();
@@ -402,20 +414,17 @@ public class BeatSyncGame : Game
         switch (e.Key)
         {
             case Keys.Z:
-                if (shift) { CommandStack.Redo(); EngineLogs.Logger.LogDebug("Redo"); } else { CommandStack.Undo(); EngineLogs.Logger.LogDebug("Undo"); }
-                break;
             case Keys.Y:
-                CommandStack.Redo();
-                EngineLogs.Logger.LogDebug("Redo");
-                break;
             case Keys.C:
-                _eventConsolePanel.CopySelectionToClipboard();
-                break;
             case Keys.X:
-                if (_eventConsolePanel.CopySelectionToClipboard()) _eventConsolePanel.RemoveSelectedEntry();
-                break;
             case Keys.V:
-                // Paste: no-op
+            case Keys.A:
+                lock (_pendingShortcutLock)
+                {
+                    _pendingEditShortcutKey = e.Key;
+                    _pendingEditShortcutShift = shift;
+                    _pendingEditShortcutQueued = true;
+                }
                 break;
         }
     }
@@ -713,12 +722,55 @@ public class BeatSyncGame : Game
         }
 
         ProcessDroppedFiles();
-        // On Windows always merge Win32 key state so shortcuts see keys even when MonoGame/SDL polling or KeyDown/KeyUp fail. Focus check (shortcutsAllowed) still prevents acting when alt-tabbed.
+        // Merge Win32 key state when window has focus so shortcuts see keys even when MonoGame/SDL polling or KeyDown/KeyUp fail.
         bool gameWindowHasFocus = IsActive || IsGameWindowForeground();
-        Input.Update(OperatingSystem.IsWindows() ? true : gameWindowHasFocus);
+        Input.Update(gameWindowHasFocus);
 
         // Global shortcuts only when no modal dialog and window has focus (Space, Delete, brackets, Ctrl+1/2, Ctrl+Z/Y/C/X/V/S)
         bool shortcutsAllowed = !_openDialogPanel.IsVisible && !_optionsDialogPanel.IsVisible && gameWindowHasFocus;
+
+        // Process edit shortcut queued from KeyDown first (so it works when OS consumes key before next poll).
+        // Allow when no dialog is open (KeyDown only fires when window has key focus, so no need to re-check gameWindowHasFocus).
+        bool editShortcutConsumed = false;
+        Keys pendingKey = Keys.None;
+        bool pendingShift = false;
+        bool dialogsClosed = !_openDialogPanel.IsVisible && !_optionsDialogPanel.IsVisible;
+        lock (_pendingShortcutLock)
+        {
+            pendingKey = _pendingEditShortcutKey;
+            pendingShift = _pendingEditShortcutShift;
+            if (_pendingEditShortcutQueued && dialogsClosed)
+            {
+                _pendingEditShortcutQueued = false;
+                _pendingEditShortcutKey = Keys.None;
+                editShortcutConsumed = true;
+            }
+        }
+        if (editShortcutConsumed)
+        {
+            switch (pendingKey)
+            {
+                case Keys.Z:
+                    if (pendingShift) { CommandStack.Redo(); EngineLogs.Logger.LogDebug("Redo"); } else { CommandStack.Undo(); EngineLogs.Logger.LogDebug("Undo"); }
+                    break;
+                case Keys.Y:
+                    CommandStack.Redo();
+                    EngineLogs.Logger.LogDebug("Redo");
+                    break;
+                case Keys.C:
+                    _eventConsolePanel.CopySelectionToClipboard();
+                    break;
+                case Keys.X:
+                    if (_eventConsolePanel.CopySelectionToClipboard()) _eventConsolePanel.RemoveSelectedEntry();
+                    break;
+                case Keys.V:
+                    break; // Paste: no-op
+                case Keys.A:
+                    _eventConsolePanel.SelectAll();
+                    break;
+            }
+        }
+
         if (shortcutsAllowed && Input.IsKeyPressed(Keys.Space))
         {
             if (Transport.IsPlaying)
@@ -804,8 +856,39 @@ public class BeatSyncGame : Game
             EngineLogs.Logger.LogDebug("Record mode {State}", _recordMode ? "on" : "off");
         }
 
-        // Edit shortcuts: Ctrl+S here; Ctrl+Z/Y/C/X/V handled in OnKeyDown so they fire when OS delivers the key
+        // Edit shortcuts: Ctrl+S here; Z/Y/C/X/V/A from pending (KeyDown), merged key state, or Win32 fallback
         if (shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.S)) { if (shift) SaveProjectAsDialogOnStaThread(); else SaveProjectToCurrentPath(); }
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.Z)) { if (shift) { CommandStack.Redo(); EngineLogs.Logger.LogDebug("Redo"); } else { CommandStack.Undo(); EngineLogs.Logger.LogDebug("Undo"); } editShortcutConsumed = true; }
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.Y)) { CommandStack.Redo(); EngineLogs.Logger.LogDebug("Redo"); editShortcutConsumed = true; }
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.C)) { _eventConsolePanel.CopySelectionToClipboard(); editShortcutConsumed = true; }
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.X)) { if (_eventConsolePanel.CopySelectionToClipboard()) _eventConsolePanel.RemoveSelectedEntry(); editShortcutConsumed = true; }
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.V)) { editShortcutConsumed = true; } // Paste: no-op
+        if (!editShortcutConsumed && shortcutsAllowed && ctrl && Input.IsKeyPressed(Keys.A)) { _eventConsolePanel.SelectAll(); editShortcutConsumed = true; }
+        // Win32 fallback when KeyDown and merged state miss the key (e.g. SDL not delivering Ctrl+Z)
+        if (!editShortcutConsumed && shortcutsAllowed && Input.Win32EditShortcutPressed is { } win32)
+        {
+            switch (win32.key)
+            {
+                case Keys.Z:
+                    if (win32.shift) { CommandStack.Redo(); EngineLogs.Logger.LogDebug("Redo"); } else { CommandStack.Undo(); EngineLogs.Logger.LogDebug("Undo"); }
+                    break;
+                case Keys.Y:
+                    CommandStack.Redo();
+                    EngineLogs.Logger.LogDebug("Redo");
+                    break;
+                case Keys.C:
+                    _eventConsolePanel.CopySelectionToClipboard();
+                    break;
+                case Keys.X:
+                    if (_eventConsolePanel.CopySelectionToClipboard()) _eventConsolePanel.RemoveSelectedEntry();
+                    break;
+                case Keys.V:
+                    break;
+                case Keys.A:
+                    _eventConsolePanel.SelectAll();
+                    break;
+            }
+        }
 
         // Seek backward: clear fired events and spawned entities so replay is correct (keep engine logs)
         if (Transport.CurrentTime < _lastPlaybackTime)
@@ -825,6 +908,9 @@ public class BeatSyncGame : Game
                 // No audio file, or audio not reporting yet (e.g. first frame after Resume) — advance by game time so playhead doesn't stall
                 Transport.CurrentTime += gameTime.ElapsedGameTime.TotalSeconds;
 
+            if (_metronomeEnabled)
+                _metronome.Update(prevTime, Transport.CurrentTime, Transport);
+
             if (Project.InTime is { } inT && Project.OutTime is { } outT && outT > inT)
             {
                 const double inOutTolerance = 0.05; // avoid stopping when starting at in point (audio may report slightly before inT for a frame)
@@ -834,6 +920,7 @@ public class BeatSyncGame : Game
                 {
                     Transport.Pause();
                     _audio.Pause();
+                    _metronome.Reset();
                     Transport.CurrentTime = Math.Clamp(Transport.CurrentTime, inT, outT);
                 }
                 else
@@ -869,18 +956,23 @@ public class BeatSyncGame : Game
                     {
                         string message = track switch
                         {
-                            SpawnEntityTrack => "spawned entity",
-                            ChangeEntityColorTrack => "changed entity color",
-                            _ => "fired"
+                            ChangeEntityColorTrack colorTrack => $"Changed entity \"{track.DisplayName}\" color to {colorTrack.GetColor(eventTime)}.",
+                            SpawnEntityTrack spawnTrack => $"Spawned entity \"{track.DisplayName}\" ({spawnTrack.EntityKind}, count {(spawnTrack.SpawnMode == SpawnMode.Single ? 1 : spawnTrack.Count)}).",
+                            SfxTrack sfxTrack => string.IsNullOrEmpty(sfxTrack.FmodAudioEventPath)
+                                ? $"Fired SFX \"{track.DisplayName}\"."
+                                : $"Played SFX \"{track.DisplayName}\" ({sfxTrack.FmodAudioEventPath}).",
+                            ScreenshakeTrack shakeTrack => $"Screenshake \"{track.DisplayName}\" (amplitude {shakeTrack.Amplitude:F2}, duration {shakeTrack.Duration:F2}s).",
+                            _ => $"Fired \"{track.DisplayName}\"."
                         };
                         _eventConsolePanel.LogEvent(Transport.CurrentTime, track.DisplayName, message);
-                        if (track is ChangeEntityColorTrack colorTrack)
+                        if (track is ChangeEntityColorTrack ct)
                         {
-                            var xnaColor = ChangeEntityColorTrack.ToXnaColor(colorTrack.GetColor(eventTime));
+                            var xnaColor = ChangeEntityColorTrack.ToXnaColor(ct.GetColor(eventTime));
                             _gameViewPanel.SetEnemyCubeColor(xnaColor);
                         }
                         else if (track is SpawnEntityTrack spawnTrack)
                         {
+                            var rnd = Random.Shared;
                             var basePos = spawnTrack.PositionMode == PositionMode.Origin ? new Vector3(0, 1, 0)
                                 : spawnTrack.PositionMode == PositionMode.Absolute ? spawnTrack.PositionAbsolute
                                 : spawnTrack.PositionRelative;
@@ -888,14 +980,20 @@ public class BeatSyncGame : Game
                             var baseDir = spawnTrack.RotationMode == RotationMode.Towards
                                 ? (playerPos - basePos).LengthSquared() < 1e-12f ? -Vector3.UnitZ : Vector3.Normalize(playerPos - basePos)
                                 : ForwardFromEuler(spawnTrack.RotationEuler);
-                            var lifetime = spawnTrack.Lifetime;
+                            var lifetime = spawnTrack.EvaluateFloat("Lifetime", spawnTrack.Lifetime, rnd);
                             bool isProjectile = spawnTrack.EntityKind == SpawnEntityKind.Projectile;
-                            var speed = isProjectile ? spawnTrack.Speed : 0f;
+                            var speed = isProjectile ? spawnTrack.EvaluateFloat("Speed", spawnTrack.Speed, rnd) : 0f;
+                            var oscillationAmplitude = spawnTrack.EvaluateFloat("OscillationAmplitude", spawnTrack.OscillationAmplitude, rnd);
+                            var orbitingDistance = spawnTrack.EvaluateFloat("OrbitingDistance", spawnTrack.OrbitingDistance, rnd);
 
-                            var spawns = ExpandSpawnPattern(spawnTrack, basePos, baseDir);
+                            var spawns = ExpandSpawnPattern(spawnTrack, basePos, baseDir, rnd);
                             foreach (var (pos, dir) in spawns)
                                 _gameViewPanel.SpawnEntityWithDirection(pos, dir, speed, lifetime,
-                                    spawnTrack.DirectionPattern, spawnTrack.OscillationAmplitude, spawnTrack.OrbitingDistance, isProjectile);
+                                    spawnTrack.DirectionPattern, oscillationAmplitude, orbitingDistance, isProjectile);
+                        }
+                        else if (track is ScreenshakeTrack shakeTrack)
+                        {
+                            _gameViewPanel.TriggerScreenshake(shakeTrack.Amplitude, shakeTrack.Duration);
                         }
                     }
                 }
@@ -964,6 +1062,17 @@ public class BeatSyncGame : Game
                 _inspectorResizeDragging = false;
         }
 
+        if (_bottomRowResizeDragging)
+        {
+            int bottomRowWidth = _graphics.PreferredBackBufferWidth - _layout.Inspector.Width;
+            int minW = PanelLayout.MinGameViewWidth;
+            int maxW = Math.Max(minW, bottomRowWidth - PanelLayout.MinEventConsoleWidth);
+            int newW = _bottomRowResizeStartWidth + (Input.MousePosition.X - _bottomRowResizeStartX);
+            _layout.GameViewWidthPx = Math.Clamp(newW, minW, maxW);
+            if (Input.MouseLeftReleased)
+                _bottomRowResizeDragging = false;
+        }
+
         _openDialogPanel.GraphicsDevice = GraphicsDevice;
         _openDialogPanel.Input = Input;
         if (_openDialogPanel.IsVisible)
@@ -990,20 +1099,29 @@ public class BeatSyncGame : Game
             return;
         }
 
-        if (!_gameViewResizeDragging && !_inspectorResizeDragging && Input.MouseLeftPressed && _layout.DividerGrip.Contains(Input.MousePosition))
+        if (!_gameViewResizeDragging && !_inspectorResizeDragging && !_bottomRowResizeDragging && Input.MouseLeftPressed && _layout.DividerGrip.Contains(Input.MousePosition))
         {
             _gameViewResizeDragging = true;
             _gameViewResizeStartY = Input.MousePosition.Y;
             _gameViewResizeStartHeight = _layout.GameViewHeightPx;
         }
 
-        if (!_gameViewResizeDragging && !_inspectorResizeDragging && Input.MouseLeftPressed && _layout.InspectorDividerGrip.Contains(Input.MousePosition))
+        if (!_gameViewResizeDragging && !_inspectorResizeDragging && !_bottomRowResizeDragging && Input.MouseLeftPressed && _layout.InspectorDividerGrip.Contains(Input.MousePosition))
         {
             _inspectorResizeDragging = true;
             _inspectorResizeStartX = Input.MousePosition.X;
             _inspectorResizeStartWidth = _layout.Inspector.Width;
             if (_layout.InspectorWidthPx == 0)
                 _layout.InspectorWidthPx = _inspectorResizeStartWidth;
+        }
+
+        if (!_gameViewResizeDragging && !_inspectorResizeDragging && !_bottomRowResizeDragging && Input.MouseLeftPressed && _layout.BottomRowDividerGrip.Contains(Input.MousePosition))
+        {
+            _bottomRowResizeDragging = true;
+            _bottomRowResizeStartX = Input.MousePosition.X;
+            _bottomRowResizeStartWidth = _layout.GameView.Width;
+            if (_layout.GameViewWidthPx == 0)
+                _layout.GameViewWidthPx = _bottomRowResizeStartWidth;
         }
         _headerBarPanel.Bounds = _layout.HeaderBar;
         _headerBarPanel.GraphicsDevice = GraphicsDevice;
@@ -1079,13 +1197,16 @@ public class BeatSyncGame : Game
         _transportBar.TotalDurationSeconds = _waveformCache.DurationSeconds;
         _transportBar.Input = Input;
         _transportBar.RecordMode = RecordMode;
+        _transportBar.MetronomeOn = _metronomeEnabled;
         _transportBar.OnRecordToggle = () => _recordMode = !_recordMode;
+        _transportBar.OnMetronomeToggle = () => _metronomeEnabled = !_metronomeEnabled;
         _transportBar.OnPlayPauseToggle = () =>
         {
             if (Transport.IsPlaying)
             {
                 Transport.Pause();
                 _audio.Pause();
+                _metronome.Reset();
                 EngineLogs.Logger.LogDebug("Transport paused.");
             }
             else
@@ -1123,9 +1244,9 @@ public class BeatSyncGame : Game
         {
             Transport.Seek(t);
             _playheadDisplayTime = t;
+            _metronome.SyncToTime(Transport);
             if (_audio.LoadedFilePath != null)
                 _audio.Seek(t);
-            EngineLogs.Logger.LogDebug("Seek to {Time:F2}s", t);
         };
         _transportBar.TimeEditRequested = () =>
         {
@@ -1145,9 +1266,9 @@ public class BeatSyncGame : Game
                     t = Math.Clamp(t, inT, outT);
                 Transport.Seek(t);
                 _playheadDisplayTime = t;
+                _metronome.SyncToTime(Transport);
                 if (_audio.LoadedFilePath != null)
                     _audio.Seek(t);
-                EngineLogs.Logger.LogDebug("Seek to {Time:F2}s", t);
             }
         };
         _transportBar.Update(gameTime);
@@ -1178,7 +1299,6 @@ public class BeatSyncGame : Game
             _playheadDisplayTime = t;
             if (_audio.LoadedFilePath != null)
                 _audio.Seek(t);
-            EngineLogs.Logger.LogDebug("Seek to {Time:F2}s", t);
         };
         _inspectorPanel.Selection = Selection;
         _inspectorPanel.Input = Input;
@@ -1187,7 +1307,7 @@ public class BeatSyncGame : Game
         _statusBarPanel.Bounds = _layout.StatusBar;
         string? hoverText = null;
         MouseCursor? desiredCursor = null;
-        if (_inspectorResizeDragging)
+        if (_inspectorResizeDragging || _bottomRowResizeDragging)
             desiredCursor = MouseCursor.SizeWE;
         else if (_gameViewResizeDragging)
             desiredCursor = MouseCursor.SizeNS;
@@ -1203,6 +1323,11 @@ public class BeatSyncGame : Game
             hoverText = "Drag to resize inspector";
             desiredCursor = MouseCursor.SizeWE;
         }
+        else if (_layout.BottomRowDividerGrip.Contains(Input.MousePosition))
+        {
+            hoverText = "Drag to resize game view / event console";
+            desiredCursor = MouseCursor.SizeWE;
+        }
         else if (_transportBar.ContainsPoint(Input.MousePosition))
             hoverText = _transportBar.GetHoverText(Input.MousePosition);
         else if (_trackListPanel.ContainsPoint(Input.MousePosition))
@@ -1215,7 +1340,7 @@ public class BeatSyncGame : Game
         else if (_inspectorPanel.ContainsPoint(Input.MousePosition))
             hoverText = _inspectorPanel.GetHoverText(Input.MousePosition);
         else if (_eventConsolePanel.ContainsPoint(Input.MousePosition))
-            hoverText = "Console — Engine / Events toggles; click to select, Ctrl+C to copy";
+            hoverText = "Console — Log level (cycle), Engine / Events toggles; click to select, Ctrl+C to copy";
         else if (_gameViewPanel.ContainsPoint(Input.MousePosition))
             hoverText = _gameViewPanel.GetHoverText(Input.MousePosition);
 
@@ -1254,10 +1379,10 @@ public class BeatSyncGame : Game
         return f.LengthSquared() > 1e-8f ? Vector3.Normalize(f) : -Vector3.UnitZ;
     }
 
-    private static List<(Vector3 position, Vector3 direction)> ExpandSpawnPattern(SpawnEntityTrack t, Vector3 basePos, Vector3 baseDir)
+    private static List<(Vector3 position, Vector3 direction)> ExpandSpawnPattern(SpawnEntityTrack t, Vector3 basePos, Vector3 baseDir, Random rnd)
     {
         var list = new List<(Vector3 position, Vector3 direction)>();
-        int n = t.SpawnMode == SpawnMode.Single ? 1 : Math.Clamp(t.Count, 1, 10);
+        int n = t.SpawnMode == SpawnMode.Single ? 1 : Math.Clamp(t.EvaluateInt("Count", t.Count, rnd), 1, 10);
         if (n == 1)
         {
             list.Add((basePos, baseDir));
@@ -1267,8 +1392,9 @@ public class BeatSyncGame : Game
         {
             case SpawnPattern.Circle:
             {
-                float radius = Math.Max(0f, t.CircleRadius);
-                float spanRad = t.CircleFullCircle ? MathF.PI * 2f : (t.CircleSpread * MathF.PI / 180f);
+                float radius = Math.Max(0f, t.EvaluateFloat("CircleRadius", t.CircleRadius, rnd));
+                float circleSpread = t.EvaluateFloat("CircleSpread", t.CircleSpread, rnd);
+                float spanRad = t.CircleFullCircle ? MathF.PI * 2f : (circleSpread * MathF.PI / 180f);
                 float start = t.CircleFullCircle ? 0f : -spanRad * 0.5f;
                 for (int i = 0; i < n; i++)
                 {
@@ -1282,7 +1408,8 @@ public class BeatSyncGame : Game
             }
             case SpawnPattern.Cone:
             {
-                float halfRad = Math.Clamp(t.ConeSpreadAngle * 0.5f, 0.01f, 179f) * MathF.PI / 180f;
+                float coneSpread = t.EvaluateFloat("ConeSpreadAngle", t.ConeSpreadAngle, rnd);
+                float halfRad = Math.Clamp(coneSpread * 0.5f, 0.01f, 179f) * MathF.PI / 180f;
                 var right = Vector3.Cross(baseDir, Vector3.UnitY);
                 if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
                 else right.Normalize();
@@ -1297,7 +1424,7 @@ public class BeatSyncGame : Game
             }
             case SpawnPattern.Line:
             {
-                float len = Math.Max(0.001f, t.LineLength);
+                float len = Math.Max(0.001f, t.EvaluateFloat("LineLength", t.LineLength, rnd));
                 var right = Vector3.Cross(baseDir, Vector3.UnitY);
                 if (right.LengthSquared() < 1e-10f) right = Vector3.UnitX;
                 else right.Normalize();
@@ -1359,14 +1486,13 @@ public class BeatSyncGame : Game
         _trackListPanel.Draw(_spriteBatch);
         _timelinePanel.Draw(_spriteBatch);
 
-        // Draw bottom-row divider: horizontal bar above game view for resize grip
+        // Draw bottom-row divider: horizontal bar above game view + event console for resize grip
         var gripPixel = PanelBase.GetPixelTexture(GraphicsDevice);
         var grip = _layout.DividerGrip;
-        var gameView = _layout.GameView;
         var horizontalBarY = grip.Y;
         var horizontalBarHeight = grip.Height;
-        _spriteBatch.Draw(gripPixel, new Rectangle(gameView.X, horizontalBarY, gameView.Width, horizontalBarHeight), new Color(70, 75, 85));
-        _spriteBatch.Draw(gripPixel, new Rectangle(gameView.X, horizontalBarY + horizontalBarHeight / 2 - 1, gameView.Width, 2), new Color(110, 118, 132));
+        _spriteBatch.Draw(gripPixel, new Rectangle(grip.X, grip.Y, grip.Width, grip.Height), new Color(70, 75, 85));
+        _spriteBatch.Draw(gripPixel, new Rectangle(grip.X, horizontalBarY + horizontalBarHeight / 2 - 1, grip.Width, 2), new Color(110, 118, 132));
 
         if (_audioLoad.IsLoading)
         {
@@ -1380,12 +1506,16 @@ public class BeatSyncGame : Game
         gd.ScissorRectangle = gd.Viewport.Bounds;
         _gameViewPanel.Draw(_spriteBatch);
 
-        // Draw event console after game view so it appears in the right column below the inspector, not covered
+        // Draw event console to the right of game view (same bottom row)
         _eventConsolePanel.Draw(_spriteBatch);
 
         var inspectorGrip = _layout.InspectorDividerGrip;
         _spriteBatch.Draw(gripPixel, inspectorGrip, new Color(70, 75, 85));
         _spriteBatch.Draw(gripPixel, new Rectangle(inspectorGrip.X + inspectorGrip.Width / 2 - 1, inspectorGrip.Y, 2, inspectorGrip.Height), new Color(110, 118, 132));
+
+        var bottomRowGrip = _layout.BottomRowDividerGrip;
+        _spriteBatch.Draw(gripPixel, bottomRowGrip, new Color(70, 75, 85));
+        _spriteBatch.Draw(gripPixel, new Rectangle(bottomRowGrip.X + bottomRowGrip.Width / 2 - 1, bottomRowGrip.Y, 2, bottomRowGrip.Height), new Color(110, 118, 132));
 
         // Draw header (and File dropdown) on top so dropdown is not covered by transport/timeline
         _headerBarPanel.Draw(_spriteBatch);

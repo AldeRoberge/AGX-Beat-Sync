@@ -22,6 +22,8 @@ public enum InspectorNumberField
     RotationX, RotationY, RotationZ,
 }
 
+public enum RandomSubField { None, Low, High }
+
 public class SpawnEntityInspectorRenderer : IInspectorRenderer
 {
     private bool _positionExpanded = true;
@@ -36,7 +38,28 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 
     // Number field editing
     private InspectorNumberField _focusedField = InspectorNumberField.None;
+    private RandomSubField _randomSubField = RandomSubField.None;
     private string _editText = "";
+
+    // Random toggle and Low/High rects (set during Draw when field is visible and random on)
+    private Rectangle _speedRandomButtonRect;
+    private Rectangle _lifetimeRandomButtonRect;
+    private Rectangle _countRandomButtonRect;
+    private Rectangle _circleRadiusRandomButtonRect;
+    private Rectangle _circleSpreadRandomButtonRect;
+    private Rectangle _coneSpreadAngleRandomButtonRect;
+    private Rectangle _lineLengthRandomButtonRect;
+    private Rectangle _oscillationAmplitudeRandomButtonRect;
+    private Rectangle _orbitingDistanceRandomButtonRect;
+    private Rectangle _speedLowValueRect, _speedHighValueRect;
+    private Rectangle _lifetimeLowValueRect, _lifetimeHighValueRect;
+    private Rectangle _countLowValueRect, _countHighValueRect;
+    private Rectangle _circleRadiusLowValueRect, _circleRadiusHighValueRect;
+    private Rectangle _circleSpreadLowValueRect, _circleSpreadHighValueRect;
+    private Rectangle _coneSpreadAngleLowValueRect, _coneSpreadAngleHighValueRect;
+    private Rectangle _lineLengthLowValueRect, _lineLengthHighValueRect;
+    private Rectangle _oscillationAmplitudeLowValueRect, _oscillationAmplitudeHighValueRect;
+    private Rectangle _orbitingDistanceLowValueRect, _orbitingDistanceHighValueRect;
 
     // Hit-test rects from last Draw (used in Update)
     private Rectangle _positionFoldoutRect;
@@ -79,6 +102,29 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private static readonly string[] SpawnModeOptions = Enum.GetNames<SpawnMode>();
     private static readonly string[] SpawnPatternOptions = Enum.GetNames<SpawnPattern>();
     private static readonly string[] ProjectileDirectionPatternOptions = Enum.GetNames<ProjectileDirectionPattern>();
+
+    private static string GetRandomRangeKey(InspectorNumberField field)
+    {
+        return field switch
+        {
+            InspectorNumberField.Speed => "Speed",
+            InspectorNumberField.Lifetime => "Lifetime",
+            InspectorNumberField.Count => "Count",
+            InspectorNumberField.CircleRadius => "CircleRadius",
+            InspectorNumberField.CircleSpread => "CircleSpread",
+            InspectorNumberField.ConeSpreadAngle => "ConeSpreadAngle",
+            InspectorNumberField.LineLength => "LineLength",
+            InspectorNumberField.OscillationAmplitude => "OscillationAmplitude",
+            InspectorNumberField.OrbitingDistance => "OrbitingDistance",
+            InspectorNumberField.PositionX => "PositionX",
+            InspectorNumberField.PositionY => "PositionY",
+            InspectorNumberField.PositionZ => "PositionZ",
+            InspectorNumberField.RotationX => "RotationX",
+            InspectorNumberField.RotationY => "RotationY",
+            InspectorNumberField.RotationZ => "RotationZ",
+            _ => ""
+        };
+    }
 
     private static char? GetNumericKeyChar(Keys key)
     {
@@ -168,32 +214,71 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             else
                 _patternOptionRects = Array.Empty<Rectangle>();
 
-            // Count (1-10)
+            // Count (1-10) with random toggle
             int count = Math.Clamp(t.Count, 1, 10);
-            string countText = _focusedField == InspectorNumberField.Count ? _editText : count.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            bool countCursor = _focusedField == InspectorNumberField.Count && (Environment.TickCount64 / 500) % 2 == 0;
-            _countValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Count", countText, ref cursorY, showCaret: countCursor);
+            var countRange = t.RandomRanges.TryGetValue("Count", out var cr) ? cr : null;
+            bool countRandomOn = countRange?.UseRandom ?? false;
+            string countText = countRandomOn ? $"{countRange!.Low:0} .. {countRange.High:0}" : (_focusedField == InspectorNumberField.Count ? _editText : count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            bool countCursor = _focusedField == InspectorNumberField.Count && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0;
+            (_countValueRect, _countRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Count", countText, countRandomOn, ref cursorY, showCaret: countCursor);
             y = cursorY;
+            if (countRandomOn)
+            {
+                string lowText = _focusedField == InspectorNumberField.Count && _randomSubField == RandomSubField.Low ? _editText : ((int)Math.Round(countRange!.Low)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string highText = _focusedField == InspectorNumberField.Count && _randomSubField == RandomSubField.High ? _editText : ((int)Math.Round(countRange!.High)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                _countLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Count && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+                _countHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Count && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+            }
+            else
+                _countLowValueRect = _countHighValueRect = default;
 
             // Pattern-specific params
             if (t.Pattern == SpawnPattern.Circle)
             {
                 _coneSpreadAngleValueRect = default;
                 _lineLengthValueRect = default;
-                string radiusText = _focusedField == InspectorNumberField.CircleRadius ? _editText : t.CircleRadius.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                _circleRadiusValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Radius", radiusText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleRadius && (Environment.TickCount64 / 500) % 2 == 0);
+                var radiusRange = t.RandomRanges.TryGetValue("CircleRadius", out var rr) ? rr : null;
+                bool radiusRandomOn = radiusRange?.UseRandom ?? false;
+                string radiusText = radiusRandomOn ? $"{radiusRange!.Low:0.##} .. {radiusRange.High:0.##}" : (_focusedField == InspectorNumberField.CircleRadius ? _editText : t.CircleRadius.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                (_circleRadiusValueRect, _circleRadiusRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Radius", radiusText, radiusRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleRadius && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                 y = cursorY;
+                if (radiusRandomOn)
+                {
+                    string lowText = _focusedField == InspectorNumberField.CircleRadius && _randomSubField == RandomSubField.Low ? _editText : radiusRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    string highText = _focusedField == InspectorNumberField.CircleRadius && _randomSubField == RandomSubField.High ? _editText : radiusRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _circleRadiusLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleRadius && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                    _circleRadiusHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleRadius && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _circleRadiusLowValueRect = _circleRadiusHighValueRect = default;
                 string fullCircleText = t.CircleFullCircle ? "On" : "Off";
                 _fullCircleRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Full Circle", fullCircleText, ref cursorY);
                 y = cursorY;
                 if (!t.CircleFullCircle)
                 {
-                    string spreadText = _focusedField == InspectorNumberField.CircleSpread ? _editText : t.CircleSpread.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                    _circleSpreadValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread", spreadText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleSpread && (Environment.TickCount64 / 500) % 2 == 0);
+                    var spreadRange = t.RandomRanges.TryGetValue("CircleSpread", out var spr) ? spr : null;
+                    bool spreadRandomOn = spreadRange?.UseRandom ?? false;
+                    string spreadText = spreadRandomOn ? $"{spreadRange!.Low:0.##} .. {spreadRange.High:0.##}" : (_focusedField == InspectorNumberField.CircleSpread ? _editText : t.CircleSpread.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                    (_circleSpreadValueRect, _circleSpreadRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread", spreadText, spreadRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleSpread && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                     y = cursorY;
+                    if (spreadRandomOn)
+                    {
+                        string lowText = _focusedField == InspectorNumberField.CircleSpread && _randomSubField == RandomSubField.Low ? _editText : spreadRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        string highText = _focusedField == InspectorNumberField.CircleSpread && _randomSubField == RandomSubField.High ? _editText : spreadRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        _circleSpreadLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleSpread && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                        y = cursorY;
+                        _circleSpreadHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.CircleSpread && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                        y = cursorY;
+                    }
+                    else
+                        _circleSpreadLowValueRect = _circleSpreadHighValueRect = default;
                 }
                 else
-                    _circleSpreadValueRect = default;
+                    _circleSpreadValueRect = _circleSpreadRandomButtonRect = default;
             }
             else if (t.Pattern == SpawnPattern.Cone)
             {
@@ -201,9 +286,22 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 _circleSpreadValueRect = default;
                 _fullCircleRect = default;
                 _lineLengthValueRect = default;
-                string coneText = _focusedField == InspectorNumberField.ConeSpreadAngle ? _editText : t.ConeSpreadAngle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                _coneSpreadAngleValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread Angle", coneText, ref cursorY, showCaret: _focusedField == InspectorNumberField.ConeSpreadAngle && (Environment.TickCount64 / 500) % 2 == 0);
+                var coneRange = t.RandomRanges.TryGetValue("ConeSpreadAngle", out var cor) ? cor : null;
+                bool coneRandomOn = coneRange?.UseRandom ?? false;
+                string coneText = coneRandomOn ? $"{coneRange!.Low:0.##} .. {coneRange.High:0.##}" : (_focusedField == InspectorNumberField.ConeSpreadAngle ? _editText : t.ConeSpreadAngle.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                (_coneSpreadAngleValueRect, _coneSpreadAngleRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Spread Angle", coneText, coneRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.ConeSpreadAngle && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                 y = cursorY;
+                if (coneRandomOn)
+                {
+                    string lowText = _focusedField == InspectorNumberField.ConeSpreadAngle && _randomSubField == RandomSubField.Low ? _editText : coneRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    string highText = _focusedField == InspectorNumberField.ConeSpreadAngle && _randomSubField == RandomSubField.High ? _editText : coneRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _coneSpreadAngleLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.ConeSpreadAngle && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                    _coneSpreadAngleHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.ConeSpreadAngle && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _coneSpreadAngleLowValueRect = _coneSpreadAngleHighValueRect = default;
             }
             else if (t.Pattern == SpawnPattern.Line)
             {
@@ -211,9 +309,22 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 _circleSpreadValueRect = default;
                 _fullCircleRect = default;
                 _coneSpreadAngleValueRect = default;
-                string lineText = _focusedField == InspectorNumberField.LineLength ? _editText : t.LineLength.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                _lineLengthValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Length", lineText, ref cursorY, showCaret: _focusedField == InspectorNumberField.LineLength && (Environment.TickCount64 / 500) % 2 == 0);
+                var lineRange = t.RandomRanges.TryGetValue("LineLength", out var lrr) ? lrr : null;
+                bool lineRandomOn = lineRange?.UseRandom ?? false;
+                string lineText = lineRandomOn ? $"{lineRange!.Low:0.##} .. {lineRange.High:0.##}" : (_focusedField == InspectorNumberField.LineLength ? _editText : t.LineLength.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                (_lineLengthValueRect, _lineLengthRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Length", lineText, lineRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.LineLength && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                 y = cursorY;
+                if (lineRandomOn)
+                {
+                    string lowText = _focusedField == InspectorNumberField.LineLength && _randomSubField == RandomSubField.Low ? _editText : lineRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    string highText = _focusedField == InspectorNumberField.LineLength && _randomSubField == RandomSubField.High ? _editText : lineRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _lineLengthLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.LineLength && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                    _lineLengthHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.LineLength && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _lineLengthLowValueRect = _lineLengthHighValueRect = default;
             }
         }
 
@@ -318,20 +429,49 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
 
-        // Speed (only for Projectile), Lifetime (universal)
+        // Speed (only for Projectile), Lifetime (universal) with random toggles
         if (t.EntityKind == SpawnEntityKind.Projectile)
         {
-            string speedText = _focusedField == InspectorNumberField.Speed ? _editText : t.Speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-            bool speedCursorVisible = _focusedField == InspectorNumberField.Speed && (Environment.TickCount64 / 500) % 2 == 0;
-            _speedValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, ref cursorY, showCaret: speedCursorVisible);
+            var speedRange = t.RandomRanges.TryGetValue("Speed", out var sr) ? sr : null;
+            bool speedRandomOn = speedRange?.UseRandom ?? false;
+            string speedText = speedRandomOn ? $"{speedRange!.Low:0.##} .. {speedRange.High:0.##}" : (_focusedField == InspectorNumberField.Speed ? _editText : t.Speed.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+            bool speedCursorVisible = _focusedField == InspectorNumberField.Speed && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0;
+            (_speedValueRect, _speedRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Speed", speedText, speedRandomOn, ref cursorY, showCaret: speedCursorVisible);
+            y = cursorY;
+            if (speedRandomOn)
+            {
+                string lowText = _focusedField == InspectorNumberField.Speed && _randomSubField == RandomSubField.Low ? _editText : speedRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                string highText = _focusedField == InspectorNumberField.Speed && _randomSubField == RandomSubField.High ? _editText : speedRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                _speedLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Speed && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+                _speedHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Speed && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                y = cursorY;
+            }
+            else
+                _speedLowValueRect = _speedHighValueRect = default;
+        }
+        else
+        {
+            _speedValueRect = default;
+            _speedRandomButtonRect = default;
+        }
+        var lifetimeRange = t.RandomRanges.TryGetValue("Lifetime", out var lr) ? lr : null;
+        bool lifetimeRandomOn = lifetimeRange?.UseRandom ?? false;
+        string lifetimeText = lifetimeRandomOn ? $"{lifetimeRange!.Low:0.##} .. {lifetimeRange.High:0.##}" : (_focusedField == InspectorNumberField.Lifetime ? _editText : t.Lifetime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+        bool lifetimeCursorVisible = _focusedField == InspectorNumberField.Lifetime && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0;
+        (_lifetimeValueRect, _lifetimeRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Lifetime", lifetimeText, lifetimeRandomOn, ref cursorY, showCaret: lifetimeCursorVisible);
+        y = cursorY;
+        if (lifetimeRandomOn)
+        {
+            string lowText = _focusedField == InspectorNumberField.Lifetime && _randomSubField == RandomSubField.Low ? _editText : lifetimeRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            string highText = _focusedField == InspectorNumberField.Lifetime && _randomSubField == RandomSubField.High ? _editText : lifetimeRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+            _lifetimeLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Lifetime && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+            y = cursorY;
+            _lifetimeHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.Lifetime && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
             y = cursorY;
         }
         else
-            _speedValueRect = default;
-        string lifetimeText = _focusedField == InspectorNumberField.Lifetime ? _editText : t.Lifetime.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-        bool lifetimeCursorVisible = _focusedField == InspectorNumberField.Lifetime && (Environment.TickCount64 / 500) % 2 == 0;
-        _lifetimeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Lifetime", lifetimeText, ref cursorY, showCaret: lifetimeCursorVisible);
-        y = cursorY;
+            _lifetimeLowValueRect = _lifetimeHighValueRect = default;
 
         // Direction pattern (projectile movement only)
         if (t.EntityKind == SpawnEntityKind.Projectile)
@@ -350,17 +490,43 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 
             if (t.DirectionPattern == ProjectileDirectionPattern.Oscillation)
             {
-                string ampText = _focusedField == InspectorNumberField.OscillationAmplitude ? _editText : t.OscillationAmplitude.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                _oscillationAmplitudeValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Amplitude (°)", ampText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && (Environment.TickCount64 / 500) % 2 == 0);
+                var ampRange = t.RandomRanges.TryGetValue("OscillationAmplitude", out var ar) ? ar : null;
+                bool ampRandomOn = ampRange?.UseRandom ?? false;
+                string ampText = ampRandomOn ? $"{ampRange!.Low:0.##} .. {ampRange.High:0.##}" : (_focusedField == InspectorNumberField.OscillationAmplitude ? _editText : t.OscillationAmplitude.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                (_oscillationAmplitudeValueRect, _oscillationAmplitudeRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Amplitude (°)", ampText, ampRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                 y = cursorY;
+                if (ampRandomOn)
+                {
+                    string lowText = _focusedField == InspectorNumberField.OscillationAmplitude && _randomSubField == RandomSubField.Low ? _editText : ampRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    string highText = _focusedField == InspectorNumberField.OscillationAmplitude && _randomSubField == RandomSubField.High ? _editText : ampRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _oscillationAmplitudeLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                    _oscillationAmplitudeHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OscillationAmplitude && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _oscillationAmplitudeLowValueRect = _oscillationAmplitudeHighValueRect = default;
                 _orbitingDistanceValueRect = default;
             }
             else if (t.DirectionPattern == ProjectileDirectionPattern.Orbiting)
             {
                 _oscillationAmplitudeValueRect = default;
-                string distText = _focusedField == InspectorNumberField.OrbitingDistance ? _editText : t.OrbitingDistance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-                _orbitingDistanceValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Distance", distText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && (Environment.TickCount64 / 500) % 2 == 0);
+                var distRange = t.RandomRanges.TryGetValue("OrbitingDistance", out var dr) ? dr : null;
+                bool distRandomOn = distRange?.UseRandom ?? false;
+                string distText = distRandomOn ? $"{distRange!.Low:0.##} .. {distRange.High:0.##}" : (_focusedField == InspectorNumberField.OrbitingDistance ? _editText : t.OrbitingDistance.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+                (_orbitingDistanceValueRect, _orbitingDistanceRandomButtonRect) = InspectorDrawer.DrawFloatRowWithRandomToggle(sb, pixel, sb.GraphicsDevice, x, y, w, "Distance", distText, distRandomOn, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && _randomSubField == RandomSubField.None && (Environment.TickCount64 / 500) % 2 == 0);
                 y = cursorY;
+                if (distRandomOn)
+                {
+                    string lowText = _focusedField == InspectorNumberField.OrbitingDistance && _randomSubField == RandomSubField.Low ? _editText : distRange!.Low.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    string highText = _focusedField == InspectorNumberField.OrbitingDistance && _randomSubField == RandomSubField.High ? _editText : distRange!.High.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                    _orbitingDistanceLowValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Low", lowText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && _randomSubField == RandomSubField.Low && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                    _orbitingDistanceHighValueRect = InspectorDrawer.DrawFloatRow(sb, pixel, sb.GraphicsDevice, x, y, w, "High", highText, ref cursorY, showCaret: _focusedField == InspectorNumberField.OrbitingDistance && _randomSubField == RandomSubField.High && (Environment.TickCount64 / 500) % 2 == 0);
+                    y = cursorY;
+                }
+                else
+                    _orbitingDistanceLowValueRect = _orbitingDistanceHighValueRect = default;
             }
             else
             {
@@ -435,11 +601,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 if (_editText.Length > 0)
                     _editText = _editText[..^1];
             }
-            else if (input.IsKeyPressed(Keys.Enter) || input.IsKeyPressed(Keys.Escape))
+            else                 if (input.IsKeyPressed(Keys.Enter) || input.IsKeyPressed(Keys.Escape))
             {
                 if (input.IsKeyPressed(Keys.Enter))
                     TryCommitField(t);
                 _focusedField = InspectorNumberField.None;
+                _randomSubField = RandomSubField.None;
                 return;
             }
             else
@@ -463,17 +630,19 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
                 {
                     TryCommitField(t);
                     _focusedField = InspectorNumberField.None;
+                    _randomSubField = RandomSubField.None;
                     // Fall through to allow same click to hit foldout/dropdown
                 }
                 else
                 {
                     // Click on a (possibly different) number field: commit current and focus the clicked one
-                    var clicked = GetNumberFieldAt(pt);
-                    if (clicked != _focusedField)
+                    GetNumberFieldAndSubFieldAt(pt, out var clicked, out var clickedSub);
+                    if (clicked != _focusedField || clickedSub != _randomSubField)
                     {
                         TryCommitField(t);
                         _focusedField = clicked;
-                        _editText = GetValueString(t, clicked);
+                        _randomSubField = clickedSub;
+                        _editText = GetValueString(t, clicked, clickedSub);
                     }
                     return;
                 }
@@ -507,12 +676,21 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             return;
         }
 
+        // Click on random toggle button (before number field so button takes precedence)
+        if (GetRandomButtonFieldAt(pt) is InspectorNumberField rndField)
+        {
+            ToggleRandomForField(t, rndField);
+            _focusedField = InspectorNumberField.None;
+            return;
+        }
+
         // Click on a number field to start editing
-        var fieldAt = GetNumberFieldAt(pt);
+        GetNumberFieldAndSubFieldAt(pt, out var fieldAt, out var subFieldAt);
         if (fieldAt != InspectorNumberField.None)
         {
             _focusedField = fieldAt;
-            _editText = GetValueString(t, fieldAt);
+            _randomSubField = subFieldAt;
+            _editText = GetValueString(t, fieldAt, subFieldAt);
             return;
         }
 
@@ -710,45 +888,131 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         if (_lifetimeValueRect.Contains(pt)) return true;
         if (_oscillationAmplitudeValueRect != default && _oscillationAmplitudeValueRect.Contains(pt)) return true;
         if (_orbitingDistanceValueRect != default && _orbitingDistanceValueRect.Contains(pt)) return true;
-        if (_countValueRect.Contains(pt) && _countValueRect != default) return true;
-        if (_circleRadiusValueRect.Contains(pt) && _circleRadiusValueRect != default) return true;
-        if (_circleSpreadValueRect.Contains(pt) && _circleSpreadValueRect != default) return true;
-        if (_coneSpreadAngleValueRect.Contains(pt) && _coneSpreadAngleValueRect != default) return true;
-        if (_lineLengthValueRect.Contains(pt) && _lineLengthValueRect != default) return true;
+        if (_countValueRect != default && _countValueRect.Contains(pt)) return true;
+        if (_circleRadiusValueRect != default && _circleRadiusValueRect.Contains(pt)) return true;
+        if (_circleSpreadValueRect != default && _circleSpreadValueRect.Contains(pt)) return true;
+        if (_coneSpreadAngleValueRect != default && _coneSpreadAngleValueRect.Contains(pt)) return true;
+        if (_lineLengthValueRect != default && _lineLengthValueRect.Contains(pt)) return true;
+        if (_speedLowValueRect != default && (_speedLowValueRect.Contains(pt) || _speedHighValueRect.Contains(pt))) return true;
+        if (_lifetimeLowValueRect != default && (_lifetimeLowValueRect.Contains(pt) || _lifetimeHighValueRect.Contains(pt))) return true;
+        if (_countLowValueRect != default && (_countLowValueRect.Contains(pt) || _countHighValueRect.Contains(pt))) return true;
+        if (_circleRadiusLowValueRect != default && (_circleRadiusLowValueRect.Contains(pt) || _circleRadiusHighValueRect.Contains(pt))) return true;
+        if (_circleSpreadLowValueRect != default && (_circleSpreadLowValueRect.Contains(pt) || _circleSpreadHighValueRect.Contains(pt))) return true;
+        if (_coneSpreadAngleLowValueRect != default && (_coneSpreadAngleLowValueRect.Contains(pt) || _coneSpreadAngleHighValueRect.Contains(pt))) return true;
+        if (_lineLengthLowValueRect != default && (_lineLengthLowValueRect.Contains(pt) || _lineLengthHighValueRect.Contains(pt))) return true;
+        if (_oscillationAmplitudeLowValueRect != default && (_oscillationAmplitudeLowValueRect.Contains(pt) || _oscillationAmplitudeHighValueRect.Contains(pt))) return true;
+        if (_orbitingDistanceLowValueRect != default && (_orbitingDistanceLowValueRect.Contains(pt) || _orbitingDistanceHighValueRect.Contains(pt))) return true;
         foreach (var r in _positionValueRects) if (r.Contains(pt)) return true;
         foreach (var r in _rotationValueRects) if (r.Contains(pt)) return true;
         return false;
     }
 
-    private InspectorNumberField GetNumberFieldAt(Point pt)
+    private InspectorNumberField? GetRandomButtonFieldAt(Point pt)
     {
-        if (_speedValueRect.Contains(pt)) return InspectorNumberField.Speed;
-        if (_lifetimeValueRect.Contains(pt)) return InspectorNumberField.Lifetime;
-        if (_oscillationAmplitudeValueRect != default && _oscillationAmplitudeValueRect.Contains(pt)) return InspectorNumberField.OscillationAmplitude;
-        if (_orbitingDistanceValueRect != default && _orbitingDistanceValueRect.Contains(pt)) return InspectorNumberField.OrbitingDistance;
-        if (_countValueRect != default && _countValueRect.Contains(pt)) return InspectorNumberField.Count;
-        if (_circleRadiusValueRect != default && _circleRadiusValueRect.Contains(pt)) return InspectorNumberField.CircleRadius;
-        if (_circleSpreadValueRect != default && _circleSpreadValueRect.Contains(pt)) return InspectorNumberField.CircleSpread;
-        if (_coneSpreadAngleValueRect != default && _coneSpreadAngleValueRect.Contains(pt)) return InspectorNumberField.ConeSpreadAngle;
-        if (_lineLengthValueRect != default && _lineLengthValueRect.Contains(pt)) return InspectorNumberField.LineLength;
+        if (_countRandomButtonRect != default && _countRandomButtonRect.Contains(pt)) return InspectorNumberField.Count;
+        if (_speedRandomButtonRect != default && _speedRandomButtonRect.Contains(pt)) return InspectorNumberField.Speed;
+        if (_lifetimeRandomButtonRect != default && _lifetimeRandomButtonRect.Contains(pt)) return InspectorNumberField.Lifetime;
+        if (_circleRadiusRandomButtonRect != default && _circleRadiusRandomButtonRect.Contains(pt)) return InspectorNumberField.CircleRadius;
+        if (_circleSpreadRandomButtonRect != default && _circleSpreadRandomButtonRect.Contains(pt)) return InspectorNumberField.CircleSpread;
+        if (_coneSpreadAngleRandomButtonRect != default && _coneSpreadAngleRandomButtonRect.Contains(pt)) return InspectorNumberField.ConeSpreadAngle;
+        if (_lineLengthRandomButtonRect != default && _lineLengthRandomButtonRect.Contains(pt)) return InspectorNumberField.LineLength;
+        if (_oscillationAmplitudeRandomButtonRect != default && _oscillationAmplitudeRandomButtonRect.Contains(pt)) return InspectorNumberField.OscillationAmplitude;
+        if (_orbitingDistanceRandomButtonRect != default && _orbitingDistanceRandomButtonRect.Contains(pt)) return InspectorNumberField.OrbitingDistance;
+        return null;
+    }
+
+    private void ToggleRandomForField(SpawnEntityTrack t, InspectorNumberField field)
+    {
+        string key = GetRandomRangeKey(field);
+        if (string.IsNullOrEmpty(key)) return;
+        var range = t.GetOrAddRange(key, GetCurrentValueForField(t, field));
+        range.UseRandom = !range.UseRandom;
+        if (range.UseRandom)
+        {
+            range.Low = GetCurrentValueForField(t, field);
+            range.High = range.Low;
+        }
+    }
+
+    private static float GetCurrentValueForField(SpawnEntityTrack t, InspectorNumberField field)
+    {
+        return field switch
+        {
+            InspectorNumberField.Speed => t.Speed,
+            InspectorNumberField.Lifetime => t.Lifetime,
+            InspectorNumberField.Count => t.Count,
+            InspectorNumberField.CircleRadius => t.CircleRadius,
+            InspectorNumberField.CircleSpread => t.CircleSpread,
+            InspectorNumberField.ConeSpreadAngle => t.ConeSpreadAngle,
+            InspectorNumberField.LineLength => t.LineLength,
+            InspectorNumberField.OscillationAmplitude => t.OscillationAmplitude,
+            InspectorNumberField.OrbitingDistance => t.OrbitingDistance,
+            _ => 0f
+        };
+    }
+
+    private void GetNumberFieldAndSubFieldAt(Point pt, out InspectorNumberField field, out RandomSubField subField)
+    {
+        subField = RandomSubField.None;
+        // Low/High rects first so we can set subField
+        if (_countLowValueRect != default && _countLowValueRect.Contains(pt)) { field = InspectorNumberField.Count; subField = RandomSubField.Low; return; }
+        if (_countHighValueRect != default && _countHighValueRect.Contains(pt)) { field = InspectorNumberField.Count; subField = RandomSubField.High; return; }
+        if (_speedLowValueRect != default && _speedLowValueRect.Contains(pt)) { field = InspectorNumberField.Speed; subField = RandomSubField.Low; return; }
+        if (_speedHighValueRect != default && _speedHighValueRect.Contains(pt)) { field = InspectorNumberField.Speed; subField = RandomSubField.High; return; }
+        if (_lifetimeLowValueRect != default && _lifetimeLowValueRect.Contains(pt)) { field = InspectorNumberField.Lifetime; subField = RandomSubField.Low; return; }
+        if (_lifetimeHighValueRect != default && _lifetimeHighValueRect.Contains(pt)) { field = InspectorNumberField.Lifetime; subField = RandomSubField.High; return; }
+        if (_circleRadiusLowValueRect != default && _circleRadiusLowValueRect.Contains(pt)) { field = InspectorNumberField.CircleRadius; subField = RandomSubField.Low; return; }
+        if (_circleRadiusHighValueRect != default && _circleRadiusHighValueRect.Contains(pt)) { field = InspectorNumberField.CircleRadius; subField = RandomSubField.High; return; }
+        if (_circleSpreadLowValueRect != default && _circleSpreadLowValueRect.Contains(pt)) { field = InspectorNumberField.CircleSpread; subField = RandomSubField.Low; return; }
+        if (_circleSpreadHighValueRect != default && _circleSpreadHighValueRect.Contains(pt)) { field = InspectorNumberField.CircleSpread; subField = RandomSubField.High; return; }
+        if (_coneSpreadAngleLowValueRect != default && _coneSpreadAngleLowValueRect.Contains(pt)) { field = InspectorNumberField.ConeSpreadAngle; subField = RandomSubField.Low; return; }
+        if (_coneSpreadAngleHighValueRect != default && _coneSpreadAngleHighValueRect.Contains(pt)) { field = InspectorNumberField.ConeSpreadAngle; subField = RandomSubField.High; return; }
+        if (_lineLengthLowValueRect != default && _lineLengthLowValueRect.Contains(pt)) { field = InspectorNumberField.LineLength; subField = RandomSubField.Low; return; }
+        if (_lineLengthHighValueRect != default && _lineLengthHighValueRect.Contains(pt)) { field = InspectorNumberField.LineLength; subField = RandomSubField.High; return; }
+        if (_oscillationAmplitudeLowValueRect != default && _oscillationAmplitudeLowValueRect.Contains(pt)) { field = InspectorNumberField.OscillationAmplitude; subField = RandomSubField.Low; return; }
+        if (_oscillationAmplitudeHighValueRect != default && _oscillationAmplitudeHighValueRect.Contains(pt)) { field = InspectorNumberField.OscillationAmplitude; subField = RandomSubField.High; return; }
+        if (_orbitingDistanceLowValueRect != default && _orbitingDistanceLowValueRect.Contains(pt)) { field = InspectorNumberField.OrbitingDistance; subField = RandomSubField.Low; return; }
+        if (_orbitingDistanceHighValueRect != default && _orbitingDistanceHighValueRect.Contains(pt)) { field = InspectorNumberField.OrbitingDistance; subField = RandomSubField.High; return; }
+        // Main value rects
+        if (_speedValueRect != default && _speedValueRect.Contains(pt)) { field = InspectorNumberField.Speed; return; }
+        if (_lifetimeValueRect != default && _lifetimeValueRect.Contains(pt)) { field = InspectorNumberField.Lifetime; return; }
+        if (_oscillationAmplitudeValueRect != default && _oscillationAmplitudeValueRect.Contains(pt)) { field = InspectorNumberField.OscillationAmplitude; return; }
+        if (_orbitingDistanceValueRect != default && _orbitingDistanceValueRect.Contains(pt)) { field = InspectorNumberField.OrbitingDistance; return; }
+        if (_countValueRect != default && _countValueRect.Contains(pt)) { field = InspectorNumberField.Count; return; }
+        if (_circleRadiusValueRect != default && _circleRadiusValueRect.Contains(pt)) { field = InspectorNumberField.CircleRadius; return; }
+        if (_circleSpreadValueRect != default && _circleSpreadValueRect.Contains(pt)) { field = InspectorNumberField.CircleSpread; return; }
+        if (_coneSpreadAngleValueRect != default && _coneSpreadAngleValueRect.Contains(pt)) { field = InspectorNumberField.ConeSpreadAngle; return; }
+        if (_lineLengthValueRect != default && _lineLengthValueRect.Contains(pt)) { field = InspectorNumberField.LineLength; return; }
         if (_positionValueRects.Length >= 3)
         {
-            if (_positionValueRects[0].Contains(pt)) return InspectorNumberField.PositionX;
-            if (_positionValueRects[1].Contains(pt)) return InspectorNumberField.PositionY;
-            if (_positionValueRects[2].Contains(pt)) return InspectorNumberField.PositionZ;
+            if (_positionValueRects[0].Contains(pt)) { field = InspectorNumberField.PositionX; return; }
+            if (_positionValueRects[1].Contains(pt)) { field = InspectorNumberField.PositionY; return; }
+            if (_positionValueRects[2].Contains(pt)) { field = InspectorNumberField.PositionZ; return; }
         }
         if (_rotationValueRects.Length >= 3)
         {
-            if (_rotationValueRects[0].Contains(pt)) return InspectorNumberField.RotationX;
-            if (_rotationValueRects[1].Contains(pt)) return InspectorNumberField.RotationY;
-            if (_rotationValueRects[2].Contains(pt)) return InspectorNumberField.RotationZ;
+            if (_rotationValueRects[0].Contains(pt)) { field = InspectorNumberField.RotationX; return; }
+            if (_rotationValueRects[1].Contains(pt)) { field = InspectorNumberField.RotationY; return; }
+            if (_rotationValueRects[2].Contains(pt)) { field = InspectorNumberField.RotationZ; return; }
         }
-        return InspectorNumberField.None;
+        field = InspectorNumberField.None;
     }
 
-    private static string GetValueString(SpawnEntityTrack t, InspectorNumberField field)
+    private InspectorNumberField GetNumberFieldAt(Point pt)
+    {
+        GetNumberFieldAndSubFieldAt(pt, out var f, out _);
+        return f;
+    }
+
+    private static string GetValueString(SpawnEntityTrack t, InspectorNumberField field, RandomSubField subField)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (field == InspectorNumberField.Count && subField != RandomSubField.None && t.RandomRanges.TryGetValue("Count", out var cr))
+            return subField == RandomSubField.Low ? ((int)Math.Round(cr.Low)).ToString(inv) : ((int)Math.Round(cr.High)).ToString(inv);
+        if (subField == RandomSubField.Low && t.RandomRanges.TryGetValue(GetRandomRangeKey(field), out var rangeLow))
+            return rangeLow.Low.ToString("0.##", inv);
+        if (subField == RandomSubField.High && t.RandomRanges.TryGetValue(GetRandomRangeKey(field), out var rangeHigh))
+            return rangeHigh.High.ToString("0.##", inv);
         return field switch
         {
             InspectorNumberField.Speed => t.Speed.ToString("0.##", inv),
@@ -773,57 +1037,69 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private void TryCommitField(SpawnEntityTrack t)
     {
         if (_focusedField == InspectorNumberField.None) return;
-        if (!float.TryParse(_editText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float value))
+        string key = GetRandomRangeKey(_focusedField);
+        if (_randomSubField == RandomSubField.Low || _randomSubField == RandomSubField.High)
+        {
+            if (!float.TryParse(_editText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float value))
+                return;
+            var range = t.GetOrAddRange(key, GetCurrentValueForField(t, _focusedField));
+            if (_randomSubField == RandomSubField.Low)
+                range.Low = _focusedField == InspectorNumberField.Count ? Math.Clamp(value, 1f, 10f) : value;
+            else
+                range.High = _focusedField == InspectorNumberField.Count ? Math.Clamp(value, 1f, 10f) : value;
+            return;
+        }
+        if (!float.TryParse(_editText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out float mainValue))
             return;
         switch (_focusedField)
         {
             case InspectorNumberField.Speed:
-                t.Speed = Math.Max(0.001f, value);
+                t.Speed = Math.Max(0.001f, mainValue);
                 break;
             case InspectorNumberField.Lifetime:
-                t.Lifetime = Math.Max(0.001f, value);
+                t.Lifetime = Math.Max(0.001f, mainValue);
                 break;
             case InspectorNumberField.Count:
-                t.Count = (int)Math.Clamp(Math.Round(value), 1, 10);
+                t.Count = (int)Math.Clamp(Math.Round(mainValue), 1, 10);
                 break;
             case InspectorNumberField.CircleRadius:
-                t.CircleRadius = Math.Max(0f, value);
+                t.CircleRadius = Math.Max(0f, mainValue);
                 break;
             case InspectorNumberField.CircleSpread:
-                t.CircleSpread = Math.Clamp(value, 1f, 360f);
+                t.CircleSpread = Math.Clamp(mainValue, 1f, 360f);
                 break;
             case InspectorNumberField.ConeSpreadAngle:
-                t.ConeSpreadAngle = Math.Clamp(value, 0.1f, 360f);
+                t.ConeSpreadAngle = Math.Clamp(mainValue, 0.1f, 360f);
                 break;
             case InspectorNumberField.LineLength:
-                t.LineLength = Math.Max(0.001f, value);
+                t.LineLength = Math.Max(0.001f, mainValue);
                 break;
             case InspectorNumberField.OscillationAmplitude:
-                t.OscillationAmplitude = Math.Clamp(value, 0.1f, 180f);
+                t.OscillationAmplitude = Math.Clamp(mainValue, 0.1f, 180f);
                 break;
             case InspectorNumberField.OrbitingDistance:
-                t.OrbitingDistance = Math.Max(0.001f, value);
+                t.OrbitingDistance = Math.Max(0.001f, mainValue);
                 break;
             case InspectorNumberField.PositionX:
-                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(value, t.PositionAbsolute.Y, t.PositionAbsolute.Z);
-                else t.PositionRelative = new Vector3(value, t.PositionRelative.Y, t.PositionRelative.Z);
+                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(mainValue, t.PositionAbsolute.Y, t.PositionAbsolute.Z);
+                else t.PositionRelative = new Vector3(mainValue, t.PositionRelative.Y, t.PositionRelative.Z);
                 break;
             case InspectorNumberField.PositionY:
-                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(t.PositionAbsolute.X, value, t.PositionAbsolute.Z);
-                else t.PositionRelative = new Vector3(t.PositionRelative.X, value, t.PositionRelative.Z);
+                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(t.PositionAbsolute.X, mainValue, t.PositionAbsolute.Z);
+                else t.PositionRelative = new Vector3(t.PositionRelative.X, mainValue, t.PositionRelative.Z);
                 break;
             case InspectorNumberField.PositionZ:
-                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(t.PositionAbsolute.X, t.PositionAbsolute.Y, value);
-                else t.PositionRelative = new Vector3(t.PositionRelative.X, t.PositionRelative.Y, value);
+                if (t.PositionMode == PositionMode.Absolute) t.PositionAbsolute = new Vector3(t.PositionAbsolute.X, t.PositionAbsolute.Y, mainValue);
+                else t.PositionRelative = new Vector3(t.PositionRelative.X, t.PositionRelative.Y, mainValue);
                 break;
             case InspectorNumberField.RotationX:
-                t.RotationEuler = new Vector3(value, t.RotationEuler.Y, t.RotationEuler.Z);
+                t.RotationEuler = new Vector3(mainValue, t.RotationEuler.Y, t.RotationEuler.Z);
                 break;
             case InspectorNumberField.RotationY:
-                t.RotationEuler = new Vector3(t.RotationEuler.X, value, t.RotationEuler.Z);
+                t.RotationEuler = new Vector3(t.RotationEuler.X, mainValue, t.RotationEuler.Z);
                 break;
             case InspectorNumberField.RotationZ:
-                t.RotationEuler = new Vector3(t.RotationEuler.X, t.RotationEuler.Y, value);
+                t.RotationEuler = new Vector3(t.RotationEuler.X, t.RotationEuler.Y, mainValue);
                 break;
         }
     }

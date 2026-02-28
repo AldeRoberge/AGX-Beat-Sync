@@ -4,8 +4,8 @@ namespace AGX_Beat_Sync.UI;
 
 /// <summary>
 /// Computes panel bounds for the main editor layout.
-/// Layout: Header bar (top) | Transport bar | Track list (left) | Timeline (center) | Inspector (right, top) + Event Console (right, bottom).
-/// Bottom row: Game View only (full width to the left of inspector). Game view height is user-adjustable via the divider above it.
+/// Layout: Header bar (top) | Transport bar | Track list (left) | Timeline (center) | Inspector (right, full height).
+/// Bottom row: Game View (left) | Event Console (right). Both share the row height; game view width is user-adjustable via the divider.
 /// </summary>
 public class PanelLayout
 {
@@ -15,11 +15,11 @@ public class PanelLayout
     public const int InspectorWidth = 280;
     public const int MinInspectorWidth = 180;
     public const int MinCenterWidth = 150;
-    /// <summary>Fraction of the right column height for the inspector (rest is Event Console).</summary>
-    private const float InspectorHeightFraction = 0.6f;
     public const int MinInspectorHeight = 100;
     public const int MinEventConsoleHeight = 80;
-    /// <summary>Default height of the bottom row (game view). Game view takes more space by default.</summary>
+    /// <summary>Default width of the event console when GameViewWidthPx is not set (bottom row).</summary>
+    public const int DefaultEventConsoleWidth = 220;
+    /// <summary>Default height of the bottom row (game view + event console).</summary>
     public const int DefaultGameViewHeight = 220;
     public const int MinGameViewHeight = 80;
     public const int MinGameViewWidth = 200;
@@ -47,14 +47,14 @@ public class PanelLayout
     public Rectangle GameView { get; private set; }
     public Rectangle StatusBar { get; private set; }
 
-    /// <summary>Rectangle to hit-test for dragging the timeline/game view divider (top edge of game view). Spans full bottom row width (game view).</summary>
-    public Rectangle DividerGrip => new(0, GameView.Y - DividerGripHalfHeight, GameView.Width, DividerGripHalfHeight * 2);
+    /// <summary>Rectangle to hit-test for dragging the timeline/game view divider (top edge of bottom row). Spans full width to the left of inspector.</summary>
+    public Rectangle DividerGrip => new(0, GameView.Y - DividerGripHalfHeight, GameView.Width + EventConsole.Width, DividerGripHalfHeight * 2);
 
-    /// <summary>Rectangle to hit-test for dragging the timeline / inspector divider (left edge of right column). Spans full column height (inspector + console).</summary>
-    public Rectangle InspectorDividerGrip => new(Inspector.X - InspectorGripHalfWidth, Inspector.Y, InspectorGripHalfWidth * 2, Inspector.Height + EventConsole.Height);
+    /// <summary>Rectangle to hit-test for dragging the timeline / inspector divider (left edge of right column). Spans full column height (inspector).</summary>
+    public Rectangle InspectorDividerGrip => new(Inspector.X - InspectorGripHalfWidth, Inspector.Y, InspectorGripHalfWidth * 2, Inspector.Height);
 
-    /// <summary>Rectangle to hit-test for dragging the bottom-row divider between game view and event console. Empty when layout has no such divider.</summary>
-    public Rectangle BottomRowDividerGrip => Rectangle.Empty;
+    /// <summary>Rectangle to hit-test for dragging the vertical divider between game view and event console (left edge of event console).</summary>
+    public Rectangle BottomRowDividerGrip => new(EventConsole.X - DividerGripHalfHeight, EventConsole.Y, DividerGripHalfHeight * 2, EventConsole.Height);
 
     public const int DividerGripHalfHeight = 4;
     public const int InspectorGripHalfWidth = 4;
@@ -83,30 +83,33 @@ public class PanelLayout
 
         int bottomRowY = h - StatusBarHeight - bottomPanelHeight;
         int rightColumnHeight = bottomRowY - mainAreaTop;
-        int inspectorHeight = Math.Max(MinInspectorHeight, (int)(rightColumnHeight * InspectorHeightFraction));
-        int consoleHeight = rightColumnHeight - inspectorHeight;
-        if (consoleHeight < MinEventConsoleHeight)
-        {
-            inspectorHeight = rightColumnHeight - MinEventConsoleHeight;
-            if (inspectorHeight < MinInspectorHeight)
-            {
-                inspectorHeight = MinInspectorHeight;
-                consoleHeight = rightColumnHeight - inspectorHeight;
-            }
-            else
-                consoleHeight = MinEventConsoleHeight;
-        }
-        Inspector = new Rectangle(w - inspectorWidth, mainAreaTop, inspectorWidth, inspectorHeight);
-        EventConsole = new Rectangle(w - inspectorWidth, mainAreaTop + inspectorHeight, inspectorWidth, consoleHeight);
-        TrackList = new Rectangle(0, mainAreaTop, TrackListWidth, mainAreaHeight);
+        int bottomRowWidth = w - inspectorWidth;
 
-        // Game view fills entire bottom row to the left of the inspector column
-        GameView = new Rectangle(0, bottomRowY, w - inspectorWidth, bottomPanelHeight);
+        // Inspector takes full right column above the bottom row
+        Inspector = new Rectangle(w - inspectorWidth, mainAreaTop, inspectorWidth, rightColumnHeight);
+
+        // Bottom row: Game View (left) | Event Console (right, extends under inspector to fill window)
+        int gameViewWidth;
+        int eventConsoleWidth;
+        if (GameViewWidthPx > 0)
+        {
+            gameViewWidth = Math.Clamp(GameViewWidthPx, MinGameViewWidth, bottomRowWidth - MinEventConsoleWidth);
+            eventConsoleWidth = bottomRowWidth - gameViewWidth;
+        }
+        else
+        {
+            eventConsoleWidth = Math.Clamp(DefaultEventConsoleWidth, MinEventConsoleWidth, bottomRowWidth - MinGameViewWidth);
+            gameViewWidth = bottomRowWidth - eventConsoleWidth;
+        }
+        GameView = new Rectangle(0, bottomRowY, gameViewWidth, bottomPanelHeight);
+        EventConsole = new Rectangle(gameViewWidth, bottomRowY, w - gameViewWidth, bottomPanelHeight);
 
         int centerHeight = mainHeight - bottomPanelHeight;
         int centerWidth = w - inspectorWidth - TrackListWidth;
         // Timeline starts in the strips band (below transport); strips sit above track list/inspector
         Timeline = new Rectangle(TrackListWidth, mainTop - TimelineStripsHeight, centerWidth, centerHeight + TimelineStripsHeight);
+        // Track list same height as timeline so track rows align with piano roll lanes
+        TrackList = new Rectangle(0, mainAreaTop, TrackListWidth, centerHeight + TimelineStripsHeight);
 
         StatusBar = new Rectangle(0, h - StatusBarHeight, w, StatusBarHeight);
     }

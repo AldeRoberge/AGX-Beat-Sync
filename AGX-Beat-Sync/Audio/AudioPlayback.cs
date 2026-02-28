@@ -10,7 +10,8 @@ public class AudioPlayback : IDisposable
     private AudioFileReader? _reader;
     private WaveOutEvent? _waveOut;
     private bool _disposed;
-    private bool _suppressPlaybackStopped;
+    /// <summary>When true, the next PlaybackStopped event is ignored (used to ignore the delayed event from Stop() when we call StopOutputOnly before Seek+Play).</summary>
+    private bool _ignoreNextPlaybackStopped;
 
     public string? LoadedFilePath { get; private set; }
     public bool IsPlaying => _waveOut?.PlaybackState == PlaybackState.Playing;
@@ -51,7 +52,15 @@ public class AudioPlayback : IDisposable
             _reader = new AudioFileReader(filePath);
             _waveOut = new WaveOutEvent();
             _waveOut.Init(_reader);
-            _waveOut.PlaybackStopped += (_, _) => { if (!_suppressPlaybackStopped) PlaybackStopped?.Invoke(); };
+            _waveOut.PlaybackStopped += (_, _) =>
+            {
+                if (_ignoreNextPlaybackStopped)
+                {
+                    _ignoreNextPlaybackStopped = false;
+                    return;
+                }
+                PlaybackStopped?.Invoke();
+            };
             LoadedFilePath = filePath;
             return true;
         }
@@ -90,17 +99,11 @@ public class AudioPlayback : IDisposable
     }
 
     /// <summary>Stop playback and flush output buffers without changing the read position. Use before Seek+Play when resuming after the user moved the playhead while paused, so no stale buffered audio is heard.</summary>
+    /// <remarks>PlaybackStopped from this Stop() can fire later (after buffer drain). We ignore the next PlaybackStopped so that delayed event does not pause the transport when we immediately call Play().</remarks>
     public void StopOutputOnly()
     {
-        _suppressPlaybackStopped = true;
-        try
-        {
-            _waveOut?.Stop();
-        }
-        finally
-        {
-            _suppressPlaybackStopped = false;
-        }
+        _ignoreNextPlaybackStopped = true;
+        _waveOut?.Stop();
     }
 
     /// <summary>Seek to time in seconds.</summary>

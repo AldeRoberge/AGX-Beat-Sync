@@ -321,6 +321,31 @@ public static class InspectorDrawer
         return valueRect;
     }
 
+    /// <summary>Button width for random toggle to the right of a value field.</summary>
+    public const int RandomToggleButtonWidth = 24;
+
+    /// <summary>Draw a float row with a randomize toggle button to the right. Value area is narrowed to fit the button. Returns (valueRect, randomButtonRect).</summary>
+    public static (Rectangle valueRect, Rectangle randomButtonRect) DrawFloatRowWithRandomToggle(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, bool randomOn, ref int cursorY, bool showCaret = false)
+    {
+        sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
+        DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
+        int valueW = Math.Max(60, w - LabelWidth - Padding * 2 - RandomToggleButtonWidth - 4);
+        int buttonX = x + w - Padding - RandomToggleButtonWidth;
+        var valueRect = new Rectangle(buttonX - valueW - 4, y + 2, valueW, RowHeight - 4);
+        var randomButtonRect = new Rectangle(buttonX, y + 2, RandomToggleButtonWidth, RowHeight - 4);
+        sb.Draw(pixel, valueRect, ControlBg);
+        sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
+        DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
+        if (showCaret)
+            DrawCaret(sb, pixel, device, valueRect, valueText, TextColor);
+        // Random button: "R" — darker when enabled (random on)
+        sb.Draw(pixel, randomButtonRect, randomOn ? SectionBg : ControlBg);
+        sb.Draw(pixel, new Rectangle(randomButtonRect.X - 1, randomButtonRect.Y - 1, randomButtonRect.Width + 2, randomButtonRect.Height + 2), ControlBorder);
+        DrawLabel(sb, device, randomButtonRect.X + 4, randomButtonRect.Y + 1, "R", pixel);
+        cursorY = y + RowHeight;
+        return (valueRect, randomButtonRect);
+    }
+
     /// <summary>Draw a string row: label + value text (e.g. for FMOD path). Returns the value field bounds for hit-test / edit.</summary>
     public static Rectangle DrawStringRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showCaret = false)
     {

@@ -29,6 +29,8 @@ public class SpawnedEntity
     /// <summary>Orbit axes (only for Orbiting). OrbitRight and tangent at spawn.</summary>
     public Vector3 OrbitRight { get; set; }
     public Vector3 OrbitTangent { get; set; }
+    /// <summary>Current orbit angle in radians (only for Orbiting). Advanced by frame dt for smooth motion.</summary>
+    public float OrbitAngle { get; set; }
 }
 
 public class GameViewPanel : PanelBase
@@ -43,6 +45,13 @@ public class GameViewPanel : PanelBase
     private readonly List<SpawnedEntity> _spawnedEntities = new();
     private readonly GameViewPlayer _player = new();
     private readonly GameViewOrbitCamera _camera = new();
+
+    // Screenshake: when an event fires, shake decays over Duration
+    private float _screenshakeRemaining;
+    private float _screenshakeDuration;
+    private float _screenshakeAmplitude;
+    private Vector2 _shakeOffset;
+    private static readonly Random s_shakeRandom = new();
 
     /// <summary>Spawn an entity at the given world position with velocity (direction * speed). Called when a Spawn Entity event fires.</summary>
     public void SpawnEntity(Vector3 position, Vector3 rotationEulerRadians, float speed, float lifetime = 5f)
@@ -114,6 +123,7 @@ public class GameViewPanel : PanelBase
         }
         else
         {
+            // Linear (or non-projectile): explicit pattern and zero oscillation/orbit so movement stays linear
             _spawnedEntities.Add(new SpawnedEntity
             {
                 Position = position,
@@ -121,7 +131,11 @@ public class GameViewPanel : PanelBase
                 SpawnTime = (float)(Transport?.CurrentTime ?? 0),
                 Lifetime = lifetime,
                 IsProjectile = isProjectile,
-                InitialDirection = d
+                DirectionPattern = ProjectileDirectionPattern.Linear,
+                InitialDirection = d,
+                Speed = effectiveSpeed,
+                OscillationAmplitude = 0f,
+                OrbitingDistance = 0f
             });
         }
     }
@@ -164,6 +178,15 @@ public class GameViewPanel : PanelBase
     public void ClearSpawnedEntities()
     {
         _spawnedEntities.Clear();
+        _screenshakeRemaining = 0f;
+    }
+
+    /// <summary>Trigger a screenshake (called when a Screenshake event fires). New shake overwrites any current shake.</summary>
+    public void TriggerScreenshake(float amplitude, float duration)
+    {
+        _screenshakeAmplitude = Math.Max(0f, amplitude);
+        _screenshakeDuration = Math.Max(0.001f, duration);
+        _screenshakeRemaining = _screenshakeDuration;
     }
 
     /// <summary>True while right-drag look is active; game should hide cursor.</summary>
@@ -272,7 +295,10 @@ public class GameViewPanel : PanelBase
             float aspect = (float)w / h;
             _lastProjection = Matrix.CreatePerspectiveFieldOfView(MathF.PI / 4f, aspect, 0.1f, 1000f);
             _camera.Target = _player.Position;
-            _lastView = _camera.GetViewMatrix();
+            Matrix baseView = _camera.GetViewMatrix();
+            _lastView = _screenshakeRemaining > 0
+                ? Matrix.CreateTranslation(_shakeOffset.X, _shakeOffset.Y, 0f) * baseView
+                : baseView;
             _lastViewportW = w;
             _lastViewportH = h;
             _effect.Projection = _lastProjection;
@@ -420,6 +446,20 @@ public class GameViewPanel : PanelBase
         _camera.Target = _player.Position;
         _camera.HandleInput(Input, viewportRect, dt);
 
+        // Update screenshake: random offset that decays over remaining time
+        if (_screenshakeRemaining > 0)
+        {
+            float t = _screenshakeRemaining / Math.Max(0.001f, _screenshakeDuration);
+            float magnitude = _screenshakeAmplitude * t * 2f; // scale so visible in world units
+            float angle = (float)(s_shakeRandom.NextDouble() * Math.Tau);
+            _shakeOffset = new Vector2(MathF.Cos(angle), MathF.Sin(angle)) * magnitude;
+            _screenshakeRemaining -= dt;
+            if (_screenshakeRemaining < 0)
+                _screenshakeRemaining = 0;
+        }
+        else
+            _shakeOffset = Vector2.Zero;
+
         var (forwardXZ, rightXZ) = _camera.GetCameraForwardRightXZ();
         _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
 
@@ -450,8 +490,10 @@ public class GameViewPanel : PanelBase
             else if (e.DirectionPattern == ProjectileDirectionPattern.Orbiting && e.OrbitingDistance > 0)
             {
                 float omega = e.Speed / e.OrbitingDistance;
-                float a = omega * elapsed;
-                float cosA = MathF.Cos(a), sinA = MathF.Sin(a);
+                // Advance angle by frame dt when playing so orbit is smooth (transport time updates at audio buffer rate)
+                if (Transport?.IsPlaying == true)
+                    e.OrbitAngle += omega * dt;
+                float cosA = MathF.Cos(e.OrbitAngle), sinA = MathF.Sin(e.OrbitAngle);
                 e.Position = e.OrbitCenter + (e.OrbitRight * cosA + e.OrbitTangent * sinA) * e.OrbitingDistance;
                 e.Velocity = (-e.OrbitRight * sinA + e.OrbitTangent * cosA) * e.Speed;
                 continue;

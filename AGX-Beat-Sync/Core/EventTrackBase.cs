@@ -19,6 +19,7 @@ public static class EventTrackConstants
 [JsonDerivedType(typeof(SpawnEntityTrack), typeDiscriminator: "SpawnEntity")]
 [JsonDerivedType(typeof(SfxTrack), typeDiscriminator: "SFX")]
 [JsonDerivedType(typeof(ChangeEntityColorTrack), typeDiscriminator: "ChangeEntityColor")]
+[JsonDerivedType(typeof(ScreenshakeTrack), typeDiscriminator: "Screenshake")]
 public abstract class EventTrackBase : IEventTrack
 {
     private static readonly Random s_random = new();

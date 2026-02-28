@@ -71,6 +71,8 @@ public class TimelinePanel : PanelBase
     private double _noteMoveEventTime;
     /// <summary>Time offset from note start to the point where the user grabbed (cursor time at press minus note start). Keeps the note under the cursor where it was grabbed.</summary>
     private double _noteMoveGrabOffsetSeconds;
+    /// <summary>Duration of the anchor note while moving (notes are removed from tracks during drag and only re-added on release).</summary>
+    private double _noteMoveAnchorDuration;
     /// <summary>Set on note body click; promoted to _noteMoveTrack only when user actually drags (so a simple click just selects).</summary>
     private EventTrackBase? _pendingNoteMoveTrack;
     private double _pendingNoteMoveEventTime;
@@ -112,6 +114,10 @@ public class TimelinePanel : PanelBase
 
     /// <summary>FL Studio-style dark background for the piano roll area.</summary>
     private static readonly Color PianoRollBackground = new(28, 30, 34);
+    /// <summary>Background of the note/lane area (slightly darker than panel).</summary>
+    private static readonly Color NoteAreaBackgroundColor = new(24, 26, 30);
+    /// <summary>Alternating lane stripe color.</summary>
+    private static readonly Color NoteAreaStripeColor = new(30, 32, 36);
     /// <summary>Note fill and border use white so track tint shows as the actual color (no orange baked in).</summary>
     private static readonly Color NoteFillTop = new(255, 255, 255);
     private static readonly Color NoteFillBottom = new(248, 248, 248);
@@ -140,6 +146,12 @@ public class TimelinePanel : PanelBase
     private const int ResizeHandlePillWidth = 8;
     private const int ResizeHandlePillHeight = 32;
     private const int ResizeHandlePillRadius = 4;
+
+    /// <summary>Corner radius for the note area background (rounded panel look).</summary>
+    private const int NoteAreaCornerRadius = 8;
+    private const int NoteAreaTextureSize = 64;
+    private const int NoteAreaTextureCornerRadius = 16;
+    private static Texture2D? s_noteAreaBackgroundTexture;
 
     /// <summary>Reserved height for in/out strip + playhead strip so both sit inside the panel.</summary>
     private static int StripsHeight => InOutStripHeight + TimelinePlayheadRenderer.PlayheadHeadOffset + TimelinePlayheadRenderer.PlayheadBulbRadius;
@@ -247,49 +259,40 @@ public class TimelinePanel : PanelBase
         return tex;
     }
 
-    /// <summary>Draws a rounded-rect texture using 9-slice so corners stay circular when the note is stretched. Uses high-res texture corners scaled down for crisp edges.</summary>
-    private static void DrawRoundedRect9Slice(SpriteBatch sb, Texture2D tex, int x, int y, int blockW, int h, Color tint)
+    /// <summary>Draws a rounded-rect texture using 9-slice with explicit radii and texture size (for note area background etc.).</summary>
+    private static void DrawRoundedRect9Slice(SpriteBatch sb, Texture2D tex, int x, int y, int w, int h, Color tint,
+        int displayRadius, int textureRadius, int texW, int texH)
     {
-        int r = NoteCornerRadius;
-        int r2 = r * 2;
-        int tr = NoteTextureCornerRadius;
+        int tr = textureRadius;
         int tr2 = tr * 2;
-        // Keep corners at fixed pixel size; only stretch center/edges. For very small notes, shrink effective radius.
-        int er = Math.Min(r, Math.Min(Math.Max(0, (blockW - 1) / 2), Math.Max(0, (h - 1) / 2)));
+        int er = Math.Min(displayRadius, Math.Min(Math.Max(0, (w - 1) / 2), Math.Max(0, (h - 1) / 2)));
         if (er <= 0)
         {
-            sb.Draw(tex, new Rectangle(x, y, Math.Max(1, blockW), Math.Max(1, h)), new Rectangle(0, 0, NoteTextureWidth, NoteTextureHeight), tint);
+            sb.Draw(tex, new Rectangle(x, y, Math.Max(1, w), Math.Max(1, h)), new Rectangle(0, 0, texW, texH), tint);
             return;
         }
-        int leftW = er;
-        int rightW = er;
-        int centerW = blockW - leftW - rightW;
-        int topH = er;
-        int bottomH = er;
-        int centerH = h - topH - bottomH;
-        int sw = NoteTextureWidth;
-        int sh = NoteTextureHeight;
-        // Source uses texture corner size (tr) so we scale down for crisp corners; destination uses display size (er).
-        int srcL = 0, srcR = tr, srcCx = tr, srcCw = sw - tr2, srcRx = sw - tr;
-        int srcT = 0, srcM = tr, srcCy = tr, srcCh = sh - tr2, srcBy = sh - tr;
-        // Top row
+        int leftW = er, rightW = er, centerW = w - leftW - rightW;
+        int topH = er, bottomH = er, centerH = h - topH - bottomH;
+        int srcL = 0, srcR = tr, srcCw = texW - tr2, srcRx = texW - tr;
+        int srcT = 0, srcM = tr, srcCh = texH - tr2, srcBy = texH - tr;
         sb.Draw(tex, new Rectangle(x, y, leftW, topH), new Rectangle(srcL, srcT, tr, tr), tint);
-        if (centerW > 0)
-            sb.Draw(tex, new Rectangle(x + leftW, y, centerW, topH), new Rectangle(srcR, srcT, srcCw, tr), tint);
-        sb.Draw(tex, new Rectangle(x + blockW - rightW, y, rightW, topH), new Rectangle(srcRx, srcT, tr, tr), tint);
-        // Middle row
+        if (centerW > 0) sb.Draw(tex, new Rectangle(x + leftW, y, centerW, topH), new Rectangle(srcR, srcT, srcCw, tr), tint);
+        sb.Draw(tex, new Rectangle(x + w - rightW, y, rightW, topH), new Rectangle(srcRx, srcT, tr, tr), tint);
         if (centerH > 0)
         {
             sb.Draw(tex, new Rectangle(x, y + topH, leftW, centerH), new Rectangle(srcL, srcM, tr, srcCh), tint);
-            if (centerW > 0)
-                sb.Draw(tex, new Rectangle(x + leftW, y + topH, centerW, centerH), new Rectangle(srcR, srcM, srcCw, srcCh), tint);
-            sb.Draw(tex, new Rectangle(x + blockW - rightW, y + topH, rightW, centerH), new Rectangle(srcRx, srcM, tr, srcCh), tint);
+            if (centerW > 0) sb.Draw(tex, new Rectangle(x + leftW, y + topH, centerW, centerH), new Rectangle(srcR, srcM, srcCw, srcCh), tint);
+            sb.Draw(tex, new Rectangle(x + w - rightW, y + topH, rightW, centerH), new Rectangle(srcRx, srcM, tr, srcCh), tint);
         }
-        // Bottom row
         sb.Draw(tex, new Rectangle(x, y + h - bottomH, leftW, bottomH), new Rectangle(srcL, srcBy, tr, tr), tint);
-        if (centerW > 0)
-            sb.Draw(tex, new Rectangle(x + leftW, y + h - bottomH, centerW, bottomH), new Rectangle(srcR, srcBy, srcCw, tr), tint);
-        sb.Draw(tex, new Rectangle(x + blockW - rightW, y + h - bottomH, rightW, bottomH), new Rectangle(srcRx, srcBy, tr, tr), tint);
+        if (centerW > 0) sb.Draw(tex, new Rectangle(x + leftW, y + h - bottomH, centerW, bottomH), new Rectangle(srcR, srcBy, srcCw, tr), tint);
+        sb.Draw(tex, new Rectangle(x + w - rightW, y + h - bottomH, rightW, bottomH), new Rectangle(srcRx, srcBy, tr, tr), tint);
+    }
+
+    /// <summary>Draws a rounded-rect texture using 9-slice so corners stay circular when the note is stretched. Uses high-res texture corners scaled down for crisp edges.</summary>
+    private static void DrawRoundedRect9Slice(SpriteBatch sb, Texture2D tex, int x, int y, int blockW, int h, Color tint)
+    {
+        DrawRoundedRect9Slice(sb, tex, x, y, blockW, h, tint, NoteCornerRadius, NoteTextureCornerRadius, NoteTextureWidth, NoteTextureHeight);
     }
 
     private void EnsureNoteTextures(GraphicsDevice gd)
@@ -301,12 +304,14 @@ public class TimelinePanel : PanelBase
             s_noteBorderTexture?.Dispose();
             s_noteSelectedBorderTexture?.Dispose();
             s_resizeHandlePillTexture?.Dispose();
+            s_noteAreaBackgroundTexture?.Dispose();
             s_noteTextureDevice = gd;
             s_noteFillTexture = null;
             s_noteSelectedFillTexture = null;
             s_noteBorderTexture = null;
             s_noteSelectedBorderTexture = null;
             s_resizeHandlePillTexture = null;
+            s_noteAreaBackgroundTexture = null;
         }
         if (s_noteFillTexture == null)
         {
@@ -315,6 +320,7 @@ public class TimelinePanel : PanelBase
             s_noteBorderTexture = CreateRoundedRectSolid(gd, NoteTextureWidth, NoteTextureHeight, NoteTextureCornerRadius, NoteBorder);
             s_noteSelectedBorderTexture = CreateRoundedRectSolid(gd, NoteTextureWidth, NoteTextureHeight, NoteTextureCornerRadius, NoteSelectedBorder);
             s_resizeHandlePillTexture = CreateRoundedRectSolid(gd, ResizeHandlePillWidth, ResizeHandlePillHeight, ResizeHandlePillRadius, NoteResizeHandle);
+            s_noteAreaBackgroundTexture = CreateRoundedRectSolid(gd, NoteAreaTextureSize, NoteAreaTextureSize, NoteAreaTextureCornerRadius, NoteAreaBackgroundColor);
         }
     }
 
@@ -410,22 +416,32 @@ public class TimelinePanel : PanelBase
         return (hitLeftEdge || hitRightEdge) ? MouseCursor.SizeWE : null;
     }
 
-    /// <summary>Keep playhead in view: pan view when current time scrolls off left or right. Pass seekTime when we just sought (use that instead of Transport).</summary>
+    /// <summary>Keep playhead in view: smoothly pan view when current time scrolls off left or right. Pass seekTime when we just sought (use that instead of Transport).</summary>
     private void FollowPlayheadIfOutOfView(double? seekTime = null)
     {
         if (ViewState == null) return;
-        double t = seekTime ?? (Transport != null ? Transport.CurrentTime : 0);
+        // Use smoothed playhead time when playing so the view follows what's drawn
+        double t = seekTime ?? (double.IsFinite(PlayheadDisplayTime) ? PlayheadDisplayTime : (Transport != null ? Transport.CurrentTime : 0));
         var content = ContentBounds;
         var trackArea = GetTrackContentBounds(content);
+        double viewStart = ViewState.ViewStartTime;
         double viewEnd = ViewState.ViewEndTime(trackArea.Width);
 
         const double marginSeconds = 0.5;
         const double playheadPositionFromLeft = 0.15; // keep playhead at ~15% from left when following
+        const double smoothLerpFactor = 0.2; // exponential approach toward target
+        const double snapThresholdSeconds = 0.05; // snap to target when this close
 
-        if (t < ViewState.ViewStartTime)
-            ViewState.ViewStartTime = Math.Max(0, t - marginSeconds);
+        double targetViewStart = viewStart;
+        if (t < viewStart)
+            targetViewStart = Math.Max(0, t - marginSeconds);
         else if (t > viewEnd)
-            ViewState.ViewStartTime = Math.Max(0, t - trackArea.Width / (double)ViewState.Zoom * (1.0 - playheadPositionFromLeft));
+            targetViewStart = Math.Max(0, t - trackArea.Width / (double)ViewState.Zoom * (1.0 - playheadPositionFromLeft));
+
+        if (Math.Abs(targetViewStart - viewStart) < snapThresholdSeconds)
+            ViewState.ViewStartTime = targetViewStart;
+        else
+            ViewState.ViewStartTime = viewStart + (targetViewStart - viewStart) * smoothLerpFactor;
         ClampViewToTimeRange(content);
     }
 
@@ -434,7 +450,10 @@ public class TimelinePanel : PanelBase
         if (ViewState == null || Input == null)
             return;
 
-        if (Transport != null && Transport.IsPlaying)
+        // Smoothly pan timeline to keep playhead in view when playing; skip while user is manually scrolling/panning
+        bool userScrolling = _horizontalScrollDragging || _horizontalScrollResizeLeftEdge || _horizontalScrollResizeRightEdge ||
+            (Input.IsDragging && Input.MouseMiddleDown);
+        if (Transport != null && Transport.IsPlaying && !userScrolling)
             FollowPlayheadIfOutOfView();
 
         var content = ContentBounds;
@@ -442,18 +461,23 @@ public class TimelinePanel : PanelBase
         // End horizontal/vertical scroll, playhead bulb/strip drag, note resize, note move, and rectangle selection on left release (anywhere)
         if (Input.MouseLeftReleased)
         {
-            // Apply cut only on release: notes under each moved note are cut now
+            // On release: cut target ranges then place the moved notes (they were removed at drag start and only re-added here)
             if (_noteMoveTrack != null)
             {
-                double duration = _noteMoveTrack.GetDuration(_noteMoveEventTime);
-                CutTrackWithRange(_noteMoveTrack, _noteMoveEventTime, _noteMoveEventTime + duration, _noteMoveEventTime);
+                CutTrackWithRange(_noteMoveTrack, _noteMoveEventTime, _noteMoveEventTime + _noteMoveAnchorDuration, null);
+                _noteMoveTrack.EventTimes.Add(_noteMoveEventTime);
+                _noteMoveTrack.SetDuration(_noteMoveEventTime, _noteMoveAnchorDuration);
+                _noteMoveTrack.EventTimes.Sort();
                 if (_noteMoveMultiCurrent != null && _noteMoveMultiOthers != null)
                 {
                     for (int i = 0; i < _noteMoveMultiCurrent.Count && i < _noteMoveMultiOthers.Count; i++)
                     {
                         var (track, time) = _noteMoveMultiCurrent[i];
                         double dur = _noteMoveMultiOthers[i].duration;
-                        CutTrackWithRange(track, time, time + dur, time);
+                        CutTrackWithRange(track, time, time + dur, null);
+                        track.EventTimes.Add(time);
+                        track.SetDuration(time, dur);
+                        track.EventTimes.Sort();
                     }
                 }
             }
@@ -509,6 +533,7 @@ public class TimelinePanel : PanelBase
             _pendingNoteMoveTrack = null;
             _noteMoveMultiOthers = null;
             _noteMoveMultiCurrent = null;
+            _noteMoveAnchorDuration = 0;
         }
 
         // Promote pending note move to actual move only when user drags past threshold (not on simple click)
@@ -548,6 +573,19 @@ public class TimelinePanel : PanelBase
                     {
                         _noteMoveMultiOthers = null;
                         _noteMoveMultiCurrent = null;
+                    }
+                }
+                // Remove notes from tracks so they are "in hand" until release; we only cut and re-add on release so passing over a note doesn't wipe it
+                _noteMoveAnchorDuration = _noteMoveTrack.GetDuration(_noteMoveEventTime);
+                _noteMoveTrack.EventTimes.Remove(_noteMoveEventTime);
+                _noteMoveTrack.EventDurations.Remove(_noteMoveEventTime);
+                if (_noteMoveMultiOthers != null)
+                {
+                    for (int i = 0; i < _noteMoveMultiOthers.Count; i++)
+                    {
+                        var (t, et, _, _, _) = _noteMoveMultiOthers[i];
+                        t.EventTimes.Remove(et);
+                        t.EventDurations.Remove(et);
                     }
                 }
             }
@@ -688,9 +726,7 @@ public class TimelinePanel : PanelBase
             }
         }
 
-        // Note move: drag note body to new time and/or track. Snap to grid by default; Shift = free-form.
-        // Use grab offset so the note stays under the cursor where it was grabbed (no jump to cursor).
-        // When multiple notes are selected, move all of them preserving relative positions.
+        // Note move: drag note body to new time and/or track. Notes are "in hand" (removed from tracks) until release; only preview position is updated here so passing over a note doesn't wipe it.
         if (_noteMoveTrack != null && Input.MouseLeftDown && Input.IsDragging && ViewState != null && Transport != null && Project?.EventTracks != null)
         {
             var trackArea = GetTrackContentBounds(content);
@@ -706,34 +742,20 @@ public class TimelinePanel : PanelBase
             bool positionChanged = Math.Abs(newTime - _noteMoveEventTime) > 0.0001 || newTrack != _noteMoveTrack;
             if (newTrack != null && positionChanged)
             {
-                double duration = _noteMoveTrack.GetDuration(_noteMoveEventTime);
-                _noteMoveTrack.EventTimes.Remove(_noteMoveEventTime);
-                _noteMoveTrack.EventDurations.Remove(_noteMoveEventTime);
-                newTrack.EventTimes.Add(newTime);
-                newTrack.SetDuration(newTime, duration);
-                newTrack.EventTimes.Sort();
-                // Don't cut notes under the moved note until release; they stay intact while dragging
                 _noteMoveEventTime = newTime;
                 _noteMoveTrack = newTrack;
 
-                // Move other selected notes by the same delta (preserve relative time and row offset)
                 if (_noteMoveMultiOthers != null && _noteMoveMultiCurrent != null)
                 {
                     int anchorRow = Project.EventTracks.IndexOf(newTrack);
                     if (anchorRow < 0) anchorRow = 0;
                     for (int i = 0; i < _noteMoveMultiOthers.Count && i < _noteMoveMultiCurrent.Count; i++)
                     {
-                        var (_, _, dur, rowOffset, timeOffset) = _noteMoveMultiOthers[i];
-                        var (curTrack, curTime) = _noteMoveMultiCurrent[i];
+                        var (_, _, _, rowOffset, timeOffset) = _noteMoveMultiOthers[i];
                         int newRow = Math.Clamp(anchorRow + rowOffset, 0, Project.EventTracks.Count - 1);
                         var targetTrack = Project.EventTracks[newRow] as EventTrackBase;
                         if (targetTrack == null) continue;
                         double otherNewTime = Math.Max(0, newTime + timeOffset);
-                        curTrack.EventTimes.Remove(curTime);
-                        curTrack.EventDurations.Remove(curTime);
-                        targetTrack.EventTimes.Add(otherNewTime);
-                        targetTrack.SetDuration(otherNewTime, dur);
-                        targetTrack.EventTimes.Sort();
                         _noteMoveMultiCurrent[i] = (targetTrack, otherNewTime);
                     }
                     if (Selection != null)
@@ -930,8 +952,8 @@ public class TimelinePanel : PanelBase
                 else if (ctrl)
                 {
                     var trackAreaZoom = GetTrackContentBounds(content);
-                    // Multiplicative zoom: finer steps when zoomed out, larger when zoomed in (~8% per tick)
-                    float zoomFactor = wheel > 0 ? 1.08f : 1f / 1.08f;
+                    // Multiplicative zoom: finer steps when zoomed out, larger when zoomed in (~15% per tick)
+                    float zoomFactor = wheel > 0 ? 1.15f : 1f / 1.15f;
                     ViewState.ZoomAt(zoomFactor, Input.MousePosition.X, trackAreaZoom.X);
                     ClampViewToTimeRange(content);
                 }
@@ -1012,6 +1034,7 @@ public class TimelinePanel : PanelBase
                     }
                     else
                     {
+                        Selection?.Clear();
                         double time = ClampSeekTime(Math.Max(0, ViewState.ScreenToTime(Input.MousePosition.X, trackArea.X)));
                         if (SeekRequested != null)
                             SeekRequested(time);
@@ -1022,6 +1045,7 @@ public class TimelinePanel : PanelBase
                 }
                 else if (content.Contains(Input.MousePosition))
                 {
+                    Selection?.Clear();
                     var trackAreaForSeek = GetTrackContentBounds(content);
                     double time = ClampSeekTime(Math.Max(0, ViewState.ScreenToTime(Input.MousePosition.X, trackAreaForSeek.X)));
                     if (SeekRequested != null)
@@ -1160,6 +1184,15 @@ public class TimelinePanel : PanelBase
         int stripTop = content.Y - TimelinePlayheadRenderer.PlayheadHeadOffset - TimelinePlayheadRenderer.PlayheadBulbRadius;
         int stripHeight = TimelinePlayheadRenderer.PlayheadHeadOffset + TimelinePlayheadRenderer.PlayheadBulbRadius;
         return new Rectangle(trackArea.X, stripTop, trackArea.Width, stripHeight);
+    }
+
+    /// <summary>Clamp a strip rectangle to the timeline panel's horizontal bounds so it is not drawn over the track list or inspector.</summary>
+    private Rectangle ClampToPanelHorizontal(Rectangle r)
+    {
+        int x = Math.Max(r.X, Bounds.X);
+        int right = Math.Min(r.Right, Bounds.Right);
+        int w = Math.Max(0, right - x);
+        return new Rectangle(x, r.Y, w, r.Height);
     }
 
     /// <summary>Clamp seek time to in/out bounds when both are set; otherwise ensure non-negative.</summary>
@@ -1459,16 +1492,23 @@ public class TimelinePanel : PanelBase
 
         bool hasEventTracks = Project?.EventTracks != null && Project.EventTracks.Count > 0;
 
-        // Note area background and alternating lane rows — only when we have event tracks
+        // Note area background (rounded) and alternating lane rows — only when we have event tracks
         if (hasEventTracks)
         {
-            spriteBatch.Draw(pixel, trackArea, new Color(24, 26, 30));
+            EnsureNoteTextures(spriteBatch.GraphicsDevice);
+            if (s_noteAreaBackgroundTexture != null)
+                DrawRoundedRect9Slice(spriteBatch, s_noteAreaBackgroundTexture, trackArea.X, trackArea.Y, trackArea.Width, trackArea.Height,
+                Color.White, NoteAreaCornerRadius, NoteAreaTextureCornerRadius, NoteAreaTextureSize, NoteAreaTextureSize);
+            int r = NoteAreaCornerRadius;
+            int stripeLeft = trackArea.X + r;
+            int stripeWidth = Math.Max(0, trackArea.Width - r * 2);
             for (int row = 0; row * LaneHeight < trackArea.Height; row++)
             {
                 if ((row & 1) == 1) continue;
-                var rowRect = new Rectangle(trackArea.X, trackArea.Y + row * LaneHeight, trackArea.Width, LaneHeight);
+                var rowRect = new Rectangle(stripeLeft, trackArea.Y + row * LaneHeight, stripeWidth, LaneHeight);
                 if (rowRect.Bottom > trackArea.Bottom) rowRect.Height = trackArea.Bottom - rowRect.Y;
-                spriteBatch.Draw(pixel, rowRect, new Color(30, 32, 36));
+                if (rowRect.Height > 0 && rowRect.Width > 0)
+                    spriteBatch.Draw(pixel, rowRect, NoteAreaStripeColor);
             }
         }
 
@@ -1527,7 +1567,7 @@ public class TimelinePanel : PanelBase
                     // FL Studio style: 9-slice rounded rect so corners stay perfectly circular at any note size (pill-shaped ends when long)
                     DrawRoundedRect9Slice(spriteBatch, borderTex, x - 1, y - 1, blockW + 2, h + 2, selBorderTint);
                     DrawRoundedRect9Slice(spriteBatch, fillTex, x, y, blockW, h, fillTint);
-                    // Resize handles: pill-shaped with rounded ends when note is wide enough (zoomed in)
+                    // Resize handles: pill-shaped when note is wide enough; otherwise show "..." (out of bounds / zoom in to resize)
                     if (blockW >= MinNoteWidthForResize && blockW >= NoteResizeHandleWidth && h > NoteCornerRadius * 2 && s_resizeHandlePillTexture != null)
                     {
                         int handleW = Math.Min(5, Math.Max(3, blockW / 5));
@@ -1538,6 +1578,74 @@ public class TimelinePanel : PanelBase
                         spriteBatch.Draw(s_resizeHandlePillTexture, leftHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), handleColor);
                         spriteBatch.Draw(s_resizeHandlePillTexture, rightHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), handleColor);
                     }
+                    else if (blockW >= 6 && h >= 4)
+                    {
+                        // Note too narrow for resize handles: show "..." (three dots)
+                        const int dotSize = 2;
+                        const int dotGap = 1;
+                        int totalDotsW = 3 * dotSize + 2 * dotGap;
+                        int dotsX = x + (blockW - totalDotsW) / 2;
+                        int dotsY = y + (h - dotSize) / 2;
+                        var dotColor = Darken(trackColor, 0.6f);
+                        spriteBatch.Draw(pixel, new Rectangle(dotsX, dotsY, dotSize, dotSize), dotColor);
+                        spriteBatch.Draw(pixel, new Rectangle(dotsX + dotSize + dotGap, dotsY, dotSize, dotSize), dotColor);
+                        spriteBatch.Draw(pixel, new Rectangle(dotsX + 2 * (dotSize + dotGap), dotsY, dotSize, dotSize), dotColor);
+                    }
+                }
+            }
+        }
+
+        // In-flight notes while dragging: they are removed from tracks until release, so draw them from move state
+        if (_noteMoveTrack != null && Project?.EventTracks != null && ViewState != null && s_noteFillTexture != null && s_noteBorderTexture != null && s_noteSelectedFillTexture != null && s_noteSelectedBorderTexture != null)
+        {
+            int anchorRow = Project.EventTracks.IndexOf(_noteMoveTrack);
+            if (anchorRow >= 0)
+            {
+                int visibleRowIndex = anchorRow - _laneScrollOffset;
+                if (visibleRowIndex >= 0 && visibleRowIndex < visibleLanes)
+                {
+                    double dur = _noteMoveAnchorDuration;
+                    if (_noteMoveEventTime + dur >= ViewState.ViewStartTime && _noteMoveEventTime <= viewEnd)
+                    {
+                        var baseTrack = _noteMoveTrack as EventTrackBase;
+                        Color trackColor = baseTrack?.TrackColor ?? new Color(120, 200, 255);
+                        Color borderTint = Darken(trackColor, 0.82f);
+                        Color fillTint = Lighten(trackColor, 1.35f);
+                        float fx = ViewState.TimeToScreen(_noteMoveEventTime, trackArea.X);
+                        float w = (float)(dur * ViewState.Zoom);
+                        int y = trackArea.Y + visibleRowIndex * LaneHeight + 2;
+                        int h = LaneHeight - 4;
+                        int blockW = (int)Math.Max(2, w);
+                        int x = (int)fx;
+                        DrawRoundedRect9Slice(spriteBatch, s_noteSelectedBorderTexture, x - 2, y - 2, blockW + 4, h + 4, NoteSelectionOutline);
+                        DrawRoundedRect9Slice(spriteBatch, s_noteSelectedBorderTexture, x - 1, y - 1, blockW + 2, h + 2, Darken(trackColor, 0.82f));
+                        DrawRoundedRect9Slice(spriteBatch, s_noteSelectedFillTexture, x, y, blockW, h, fillTint);
+                    }
+                }
+            }
+            if (_noteMoveMultiCurrent != null)
+            {
+                for (int i = 0; i < _noteMoveMultiCurrent.Count; i++)
+                {
+                    var (track, time) = _noteMoveMultiCurrent[i];
+                    double dur = _noteMoveMultiOthers != null && i < _noteMoveMultiOthers.Count ? _noteMoveMultiOthers[i].duration : EventTrackConstants.DefaultEventDurationSeconds;
+                    int row = Project.EventTracks.IndexOf(track);
+                    if (row < 0) continue;
+                    int visibleRowIndex = row - _laneScrollOffset;
+                    if (visibleRowIndex < 0 || visibleRowIndex >= visibleLanes) continue;
+                    if (time + dur < ViewState.ViewStartTime || time > viewEnd) continue;
+                    var baseTrack = track as EventTrackBase;
+                    Color trackColor = baseTrack?.TrackColor ?? new Color(120, 200, 255);
+                    float fx = ViewState.TimeToScreen(time, trackArea.X);
+                    float w = (float)(dur * ViewState.Zoom);
+                    int y = trackArea.Y + visibleRowIndex * LaneHeight + 2;
+                    int h = LaneHeight - 4;
+                    int blockW = (int)Math.Max(2, w);
+                    int x = (int)fx;
+                    Color fillTint = Lighten(trackColor, 1.35f);
+                    DrawRoundedRect9Slice(spriteBatch, s_noteSelectedBorderTexture, x - 2, y - 2, blockW + 4, h + 4, NoteSelectionOutline);
+                    DrawRoundedRect9Slice(spriteBatch, s_noteSelectedBorderTexture, x - 1, y - 1, blockW + 2, h + 2, Darken(trackColor, 0.82f));
+                    DrawRoundedRect9Slice(spriteBatch, s_noteSelectedFillTexture, x, y, blockW, h, fillTint);
                 }
             }
         }
@@ -1575,9 +1683,11 @@ public class TimelinePanel : PanelBase
             }
         }
 
-        // Gray overlay: dim timeline outside in/out range (song boundaries)
+        // Gray overlay: dim timeline outside in/out range (song boundaries) — only over track area, not track list or inspector
         double? inT = Project?.InTime;
         double? outT = Project?.OutTime;
+        int panelLeft = Bounds.X;
+        int panelRight = Bounds.Right;
         if (inT.HasValue && outT.HasValue && outT.Value > inT.Value)
         {
             float inX = ViewState.TimeToScreen(inT.Value, trackArea.X);
@@ -1585,14 +1695,25 @@ public class TimelinePanel : PanelBase
             var dimColor = new Color(0, 0, 0, 160);
             int leftW = (int)inX - trackArea.X;
             if (leftW > 0)
-                spriteBatch.Draw(pixel, new Rectangle(trackArea.X, trackArea.Y, leftW, trackArea.Height), dimColor);
+            {
+                int dimX = Math.Max(trackArea.X, panelLeft);
+                int dimW = Math.Min((int)inX, panelRight) - dimX;
+                if (dimW > 0)
+                    spriteBatch.Draw(pixel, new Rectangle(dimX, trackArea.Y, dimW, trackArea.Height), dimColor);
+            }
             int rightX = (int)outX;
             if (trackArea.Right > rightX)
-                spriteBatch.Draw(pixel, new Rectangle(rightX, trackArea.Y, trackArea.Right - rightX, trackArea.Height), dimColor);
+            {
+                int dimX = Math.Max(rightX, panelLeft);
+                int dimW = Math.Min(trackArea.Right, panelRight) - dimX;
+                if (dimW > 0)
+                    spriteBatch.Draw(pixel, new Rectangle(dimX, trackArea.Y, dimW, trackArea.Height), dimColor);
+            }
         }
 
-        // In/out strip (own line above playhead): background then in/out rectangle and gizmos
+        // In/out strip (own line above playhead): only over timeline, not track list or inspector
         var inOutStripBounds = GetInOutStripBounds(content);
+        inOutStripBounds = ClampToPanelHorizontal(inOutStripBounds);
         spriteBatch.Draw(pixel, inOutStripBounds, new Color(38, 42, 48));
         if (inT.HasValue && outT.HasValue && outT.Value > inT.Value)
         {
@@ -1600,6 +1721,12 @@ public class TimelinePanel : PanelBase
             float stripOutX = ViewState.TimeToScreen(outT.Value, trackArea.X);
             int rectX = (int)stripInX;
             int rectW = Math.Max(1, (int)stripOutX - rectX);
+            // Clamp in/out rectangle to strip so it is not drawn over track list or inspector
+            int stripLeft = inOutStripBounds.X;
+            int stripRight = inOutStripBounds.Right;
+            rectX = Math.Max(rectX, stripLeft);
+            rectW = Math.Min(rectX + rectW, stripRight) - rectX;
+            rectW = Math.Max(1, rectW);
             var inOutColor = new Color(70, 130, 180, 180);
             spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, rectW, inOutStripBounds.Height), inOutColor);
             // Gizmos: edge grips (In / Out) and center grip (move range)
@@ -1625,8 +1752,9 @@ public class TimelinePanel : PanelBase
             spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
             spriteBatch.Draw(pixel, new Rectangle(rectX + rectW - b, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
         }
-        // Playhead strip background (so it reads as its own line below in/out)
+        // Playhead strip background (so it reads as its own line below in/out) — only over timeline
         var playheadStripBounds = GetPlayheadStripBounds(content);
+        playheadStripBounds = ClampToPanelHorizontal(playheadStripBounds);
         spriteBatch.Draw(pixel, playheadStripBounds, new Color(32, 35, 40));
 
         // Selection rectangle (while user is dragging to select multiple notes)

@@ -49,6 +49,7 @@ public class TransportBarPanel : PanelBase
     private Texture2D? _circleTexture;
     private Texture2D? _circleOutlineTexture;
     private Texture2D? _playIconTexture;
+    private Texture2D? _metronomeTextTexture;
     private const int PlayIconSize = 14;
 
     public Project? Project { get; set; }
@@ -58,6 +59,8 @@ public class TransportBarPanel : PanelBase
     public Input.InputManager? Input { get; set; }
     /// <summary>When true, show REC indicator; keys 1-9 and 0 add events to tracks while playing.</summary>
     public bool RecordMode { get; set; }
+    /// <summary>When true, metronome is on (tock on beat 1, tick on beats 2–4).</summary>
+    public bool MetronomeOn { get; set; }
 
     public TransportBarPanel()
     {
@@ -118,13 +121,25 @@ public class TransportBarPanel : PanelBase
     public Action? OnPlayPauseToggle { get; set; }
     /// <summary>Invoked when user clicks the REC button (toggle record mode).</summary>
     public Action? OnRecordToggle { get; set; }
+    /// <summary>Invoked when user clicks the Metronome button (toggle metronome on/off).</summary>
+    public Action? OnMetronomeToggle { get; set; }
     /// <summary>Invoked when user seeks (e.g. by dragging the progress bar). Parameter is time in seconds.</summary>
     public Action<double>? SeekRequested { get; set; }
 
-    private Rectangle GetPlayPauseButtonRect()
+    private const int MetronomeButtonSize = 20;
+
+    private Rectangle GetMetronomeButtonRect()
     {
         var bpm = GetBpmArea();
         int x = bpm.Right + Padding;
+        int y = Bounds.Y + (ContentRowHeight - MetronomeButtonSize) / 2;
+        return new Rectangle(x, y, MetronomeButtonSize, MetronomeButtonSize);
+    }
+
+    private Rectangle GetPlayPauseButtonRect()
+    {
+        var metro = GetMetronomeButtonRect();
+        int x = metro.Right + Padding;
         int y = Bounds.Y + (ContentRowHeight - 24) / 2;
         return new Rectangle(x, y, PlayPauseButtonWidth, 24);
     }
@@ -170,6 +185,7 @@ public class TransportBarPanel : PanelBase
         if (GetBpmValueRect().Contains(mouse)) return "BPM — click to edit";
         if (GetPlayPauseButtonRect().Contains(mouse)) return Transport?.IsPlaying == true ? "Pause (Space)" : "Play (Space)";
         if (GetRecButtonRect().Contains(mouse)) return RecordMode ? "Record mode on (R). Press 1–9 or 0 while playing to add event to track." : "Record mode off (R). Click or press R to enable.";
+        if (GetMetronomeButtonRect().Contains(mouse)) return MetronomeOn ? "Metronome on — tock on beat 1, tick on beats 2–4" : "Metronome off — click to enable";
         if (GetTimeAreaRect().Contains(mouse)) return "Time — click to go to position";
         if (GetProgressBarRect().Contains(mouse)) return "Drag to move playhead";
         return "Transport";
@@ -228,6 +244,11 @@ public class TransportBarPanel : PanelBase
         if (GetRecButtonRect().Contains(Input.MousePosition))
         {
             OnRecordToggle?.Invoke();
+            return;
+        }
+        if (GetMetronomeButtonRect().Contains(Input.MousePosition))
+        {
+            OnMetronomeToggle?.Invoke();
             return;
         }
 
@@ -343,6 +364,19 @@ public class TransportBarPanel : PanelBase
         if (_circleTexture != null)
             spriteBatch.Draw(_circleTexture, recRect, recColor);
 
+        // Metronome button: M (tock on beat 1, tick on 2–4)
+        var metroRect = GetMetronomeButtonRect();
+        bool metroHover = metroRect.Contains(Input?.MousePosition ?? Point.Zero);
+        Color metroBg = MetronomeOn ? (metroHover ? new Color(70, 90, 120) : new Color(55, 75, 100)) : (metroHover ? new Color(55, 58, 65) : new Color(48, 52, 58));
+        spriteBatch.Draw(pixel, metroRect, metroBg);
+        EnsureMetronomeTextTexture(spriteBatch.GraphicsDevice);
+        if (_metronomeTextTexture != null)
+        {
+            int mx = metroRect.X + (metroRect.Width - _metronomeTextTexture.Width) / 2;
+            int my = metroRect.Y + (metroRect.Height - _metronomeTextTexture.Height) / 2;
+            spriteBatch.Draw(_metronomeTextTexture, new Rectangle(mx, my, _metronomeTextTexture.Width, _metronomeTextTexture.Height), new Color(200, 202, 208));
+        }
+
         // Time area (HH:mm:ss:frame — click to type and go to position)
         var timeArea = GetTimeAreaRect();
         spriteBatch.Draw(pixel, timeArea, new Color(55, 58, 64));
@@ -405,6 +439,14 @@ public class TransportBarPanel : PanelBase
         _circleOutlineTexture?.Dispose();
         _circleTexture = CreateCircleTexture(device, RecButtonSize, softEdge: true);
         _circleOutlineTexture = CreateCircleRingTexture(device, RecButtonSize + 2 * RecButtonOutlinePadding, 1f);
+    }
+
+    private void EnsureMetronomeTextTexture(GraphicsDevice device)
+    {
+        if (_metronomeTextTexture != null && !_metronomeTextTexture.IsDisposed) return;
+        _metronomeTextTexture?.Dispose();
+        var metroRect = GetMetronomeButtonRect();
+        _metronomeTextTexture = CreateLabelTextTexture(device, "M", Math.Max(1, metroRect.Width), Math.Max(1, metroRect.Height));
     }
 
     private void EnsurePlayIconTexture(GraphicsDevice device)
@@ -571,7 +613,7 @@ public class TransportBarPanel : PanelBase
             int h = bottom - top;
             if (w > 0 && h > 0)
             {
-                var dest = new Rectangle(left + (w - PlayIconSize) / 2, top + (h - PlayIconSize) / 2, PlayIconSize, PlayIconSize);
+                var dest = new Rectangle(left + (w - PlayIconSize) / 2 + 2, top + (h - PlayIconSize) / 2, PlayIconSize, PlayIconSize);
                 spriteBatch.Draw(_playIconTexture, dest, null, color, 0, Vector2.Zero, SpriteEffects.None, 0);
             }
         }
@@ -595,7 +637,7 @@ public class TransportBarPanel : PanelBase
         int centerRow = (h - 1) / 2;
         int topHeight = Math.Max(1, centerRow);
         int bottomHeight = Math.Max(1, h - 1 - centerRow);
-        int tipX = left + (w - maxW) / 2;
+        int tipX = left + (w - maxW) / 2 + 2;
         int baseX = tipX + maxW;
         for (int row = 0; row < h; row++)
         {
@@ -611,7 +653,7 @@ public class TransportBarPanel : PanelBase
 
     private static void DrawPauseIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
     {
-        int cx = rect.X + rect.Width / 2;
+        int cx = rect.X + rect.Width / 2 + 2;
         int cy = rect.Y + rect.Height / 2;
         int barW = 2;
         int gap = 2;

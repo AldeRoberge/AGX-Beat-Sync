@@ -17,6 +17,8 @@ public class InputManager
     private KeyboardState _keyPrev;
     private readonly HashSet<Keys> _eventKeysDown = new();
     private readonly object _keysLock = new();
+    // Win32 fallback: detect edit shortcut key transition when KeyDown/merged state miss it (e.g. SDL not delivering)
+    private bool _win32PrevZ, _win32PrevY, _win32PrevC, _win32PrevX, _win32PrevV, _win32PrevA;
 
     public MouseState Mouse { get; private set; }
     public KeyboardState Keyboard { get; private set; }
@@ -87,6 +89,9 @@ public class InputManager
             MergeWindowsKeyState(merged);
         Keyboard = merged.Count > 0 ? new KeyboardState(merged.ToArray()) : new KeyboardState();
 
+        if (gameWindowActive && OperatingSystem.IsWindows())
+            UpdateWin32EditShortcutState();
+
         if (MouseLeftPressed || MouseMiddlePressed)
             _dragStart = MousePosition;
         if (MouseLeftReleased || MouseMiddleReleased)
@@ -147,5 +152,39 @@ public class InputManager
         if ((GetAsyncKeyState(0x44) & 0x8000) != 0) into.Add(Keys.D);
         if ((GetAsyncKeyState(0x51) & 0x8000) != 0) into.Add(Keys.Q);
         if ((GetAsyncKeyState(0x45) & 0x8000) != 0) into.Add(Keys.E);
+    }
+
+    /// <summary>If a Ctrl+Z/Y/C/X/V/A transition was detected this frame via Win32 (for when KeyDown/merged state miss it). Cleared after read.</summary>
+    public (Keys key, bool shift)? Win32EditShortcutPressed { get; private set; }
+
+    private void UpdateWin32EditShortcutState()
+    {
+        const int VK_Z = 0x5A, VK_Y = 0x59, VK_C = 0x43, VK_X = 0x58, VK_V = 0x56, VK_A = 0x41;
+        const int VK_LCONTROL = 0xA2, VK_RCONTROL = 0xA3, VK_LSHIFT = 0xA0, VK_RSHIFT = 0xA1;
+        bool ctrl = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0 || (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
+        bool shift = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0 || (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
+        bool z = (GetAsyncKeyState(VK_Z) & 0x8000) != 0;
+        bool y = (GetAsyncKeyState(VK_Y) & 0x8000) != 0;
+        bool c = (GetAsyncKeyState(VK_C) & 0x8000) != 0;
+        bool x = (GetAsyncKeyState(VK_X) & 0x8000) != 0;
+        bool v = (GetAsyncKeyState(VK_V) & 0x8000) != 0;
+        bool a = (GetAsyncKeyState(VK_A) & 0x8000) != 0;
+
+        Win32EditShortcutPressed = null;
+        if (ctrl)
+        {
+            if (z && !_win32PrevZ) Win32EditShortcutPressed = (Keys.Z, shift);
+            else if (y && !_win32PrevY) Win32EditShortcutPressed = (Keys.Y, shift);
+            else if (c && !_win32PrevC) Win32EditShortcutPressed = (Keys.C, shift);
+            else if (x && !_win32PrevX) Win32EditShortcutPressed = (Keys.X, shift);
+            else if (v && !_win32PrevV) Win32EditShortcutPressed = (Keys.V, shift);
+            else if (a && !_win32PrevA) Win32EditShortcutPressed = (Keys.A, shift);
+        }
+        _win32PrevZ = z;
+        _win32PrevY = y;
+        _win32PrevC = c;
+        _win32PrevX = x;
+        _win32PrevV = v;
+        _win32PrevA = a;
     }
 }

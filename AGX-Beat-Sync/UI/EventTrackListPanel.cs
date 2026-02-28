@@ -13,7 +13,8 @@ namespace AGX_Beat_Sync.UI;
 /// </summary>
 public class EventTrackListPanel : PanelBase
 {
-    private const int TrackRowHeight = 26;
+    /// <summary>Match TimelinePanel.LaneHeight (28) so track rows align with piano roll lanes.</summary>
+    private const int TrackRowHeight = 28;
     private const int DropdownWidth = 130;
     /// <summary>Space reserved on the right of the dropdown for the arrow so text doesn't overlap.</summary>
     private const int DropdownArrowWidth = 20;

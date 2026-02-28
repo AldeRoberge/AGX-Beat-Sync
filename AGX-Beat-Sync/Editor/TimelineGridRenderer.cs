@@ -45,23 +45,23 @@ public static class TimelineGridRenderer
             float x = viewState.TimeToScreen(t, contentBounds.X);
             if (x < contentBounds.X - 1 || x > contentBounds.Right + 1) continue;
 
-            // FL Studio-style grid: measure = strongest, beat = medium, subdivision = very subtle
+            // FL Studio-style grid: measure = strongest, beat = medium, subdivision = subtle but visible
             Color color;
             int thickness = 1;
             double measureF = (t - beatOffsetSeconds) / measureStep;
             double beatF = (t - beatOffsetSeconds) / beatStep;
             if (Math.Abs(measureF - Math.Round(measureF)) < Eps)
             {
-                color = new Color(58, 62, 72);
+                color = new Color(78, 84, 98);
                 thickness = 2;
             }
             else if (Math.Abs(beatF - Math.Round(beatF)) < Eps)
             {
-                color = new Color(42, 46, 54);
+                color = new Color(62, 68, 80);
             }
             else
             {
-                color = new Color(34, 37, 43);
+                color = new Color(50, 54, 64);
             }
 
             for (int i = 0; i < thickness; i++)
