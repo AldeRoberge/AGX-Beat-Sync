@@ -7,6 +7,8 @@ namespace AGX_Beat_Sync_Deploy;
 class Program
 {
     private const string GcsBucketName = "agx-beat-sync-builds";
+    /// <summary>GCP project that owns the bucket (must have active billing).</summary>
+    private const string GcpProjectId = "aggh-483802";
 
     /// <summary>Solution root (AGX-Beat-Sync), resolved from executable location so paths work when run from bin/Debug/net9.0.</summary>
     private static string SolutionRoot =>
@@ -43,7 +45,14 @@ class Program
                 return 1;
             }
 
-            // Step 3: Upload to GCS (use UTC for version folder name so builds are comparable across timezones)
+            // Step 3: Ensure GCS bucket exists
+            if (!await EnsureBucketExists())
+            {
+                AnsiConsole.MarkupLine("[red]Failed to create or verify GCS bucket[/]");
+                return 1;
+            }
+
+            // Step 4: Upload to GCS (use UTC for version folder name so builds are comparable across timezones)
             var versionFolder = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
             var uploadSuccess = await UploadToGcs(publishPath, versionFolder, runtime);
 
@@ -148,6 +157,75 @@ class Program
                 AnsiConsole.MarkupLine($"[dim]  {files.Length} files in publish directory[/]");
 
                 return publishDir;
+            });
+    }
+
+    static async Task<bool> EnsureBucketExists()
+    {
+        return await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Ensuring GCS bucket '{GcsBucketName}' exists...", async _ =>
+            {
+                // Check if bucket exists via `gsutil ls gs://bucket`
+                var checkInfo = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c gsutil ls gs://{GcsBucketName}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                var checkProcess = Process.Start(checkInfo);
+                if (checkProcess == null)
+                {
+                    AnsiConsole.MarkupLine("[red]Failed to start gsutil. Ensure Google Cloud SDK is installed and on PATH.[/]");
+                    return false;
+                }
+                await checkProcess.WaitForExitAsync();
+
+                if (checkProcess.ExitCode == 0)
+                {
+                    AnsiConsole.MarkupLine($"[green]✓ Bucket '{GcsBucketName}' already exists[/]");
+                    return true;
+                }
+
+                // Bucket doesn't exist — create it
+                AnsiConsole.MarkupLine($"[yellow]Bucket '{GcsBucketName}' not found. Creating...[/]");
+
+                var createInfo = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c gsutil mb -p {GcpProjectId} gs://{GcsBucketName}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                var createProcess = Process.Start(createInfo);
+                if (createProcess == null)
+                {
+                    AnsiConsole.MarkupLine("[red]Failed to start gsutil mb.[/]");
+                    return false;
+                }
+
+                var output = await createProcess.StandardOutput.ReadToEndAsync();
+                var error = await createProcess.StandardError.ReadToEndAsync();
+                await createProcess.WaitForExitAsync();
+
+                if (createProcess.ExitCode != 0)
+                {
+                    AnsiConsole.MarkupLine($"[red]Failed to create bucket '{GcsBucketName}':[/]");
+                    AnsiConsole.WriteLine(output);
+                    AnsiConsole.WriteLine(error);
+                    AnsiConsole.MarkupLine("[yellow]Run [bold]gcloud auth login[/] if you need to authenticate.[/]");
+                    return false;
+                }
+
+                AnsiConsole.MarkupLine($"[green]✓ Bucket '{GcsBucketName}' created[/]");
+                return true;
             });
     }
 
