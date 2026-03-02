@@ -45,22 +45,30 @@ class Program
                 return 1;
             }
 
-            // Step 3: Ensure GCS bucket exists
+            // Step 3: Zip the published output
+            var versionFolder = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
+            var zipPath = await ZipPublishDirectory(publishPath, versionFolder, runtime);
+            if (zipPath == null)
+            {
+                AnsiConsole.MarkupLine("[red]Failed to create zip archive[/]");
+                return 1;
+            }
+
+            // Step 4: Ensure GCS bucket exists
             if (!await EnsureBucketExists())
             {
                 AnsiConsole.MarkupLine("[red]Failed to create or verify GCS bucket[/]");
                 return 1;
             }
 
-            // Step 4: Upload to GCS (use UTC for version folder name so builds are comparable across timezones)
-            var versionFolder = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
-            var uploadSuccess = await UploadToGcs(publishPath, versionFolder, runtime);
+            // Step 5: Upload to GCS (use UTC for version folder name so builds are comparable across timezones)
+            var uploadSuccess = await UploadToGcs(zipPath, versionFolder, runtime);
 
             if (uploadSuccess)
             {
                 AnsiConsole.MarkupLine($"[green]✓ Deployment successful![/]");
                 AnsiConsole.MarkupLine($"[cyan]Version:[/] {versionFolder}");
-                AnsiConsole.MarkupLine($"[cyan]GCS Path:[/] gs://{GcsBucketName}/{runtime}/{versionFolder}/");
+                AnsiConsole.MarkupLine($"[cyan]GCS Path:[/] gs://{GcsBucketName}/{runtime}/{versionFolder}.zip");
                 return 0;
             }
             else
@@ -160,6 +168,35 @@ class Program
             });
     }
 
+    static async Task<string?> ZipPublishDirectory(string publishDir, string versionFolder, string runtime)
+    {
+        return await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync("Zipping published output...", async _ =>
+            {
+                await Task.Yield();
+                var zipPath = Path.Combine(Path.GetTempPath(), $"agx-beat-sync-{runtime}-{versionFolder}.zip");
+                try
+                {
+                    System.IO.Compression.ZipFile.CreateFromDirectory(publishDir, zipPath, System.IO.Compression.CompressionLevel.Optimal, false);
+
+                    var info = new FileInfo(zipPath);
+                    var sizeMb = info.Length / (1024.0 * 1024.0);
+                    AnsiConsole.MarkupLine($"[green]✓ Zipped to {Path.GetFileName(zipPath)} ({sizeMb:F1} MB)[/]");
+
+                    // Clean up unzipped publish directory now that we have the archive
+                    try { Directory.Delete(publishDir, true); } catch { /* best-effort */ }
+
+                    return zipPath;
+                }
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[red]Failed to create zip: {ex.Message}[/]");
+                    return null;
+                }
+            });
+    }
+
     static async Task<bool> EnsureBucketExists()
     {
         return await AnsiConsole.Status()
@@ -229,14 +266,13 @@ class Program
             });
     }
 
-    static async Task<bool> UploadToGcs(string publishPath, string versionFolder, string runtime)
+    static async Task<bool> UploadToGcs(string zipPath, string versionFolder, string runtime)
     {
-        var destination = $"gs://{GcsBucketName}/{runtime}/{versionFolder}/";
-        // Use rsync so every file is uploaded (no wildcard; cp -r "path\*" can miss files on Windows)
+        var destination = $"gs://{GcsBucketName}/{runtime}/{versionFolder}.zip";
         var startInfo = new ProcessStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = $"/c gsutil -m rsync -r \"{publishPath}\" \"{destination}\"",
+            Arguments = $"/c gsutil cp \"{zipPath}\" \"{destination}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -250,7 +286,7 @@ class Program
             return false;
         }
 
-        AnsiConsole.MarkupLine("[cyan]Uploading to GCS (gsutil progress below)...[/]");
+        AnsiConsole.MarkupLine("[cyan]Uploading zip to GCS (gsutil progress below)...[/]");
         AnsiConsole.WriteLine();
 
         var outTask = StreamOutputToConsole(process.StandardOutput);
@@ -269,12 +305,12 @@ class Program
 
         try
         {
-            Directory.Delete(publishPath, true);
-            AnsiConsole.MarkupLine("[dim]  Cleaned up temporary files[/]");
+            File.Delete(zipPath);
+            AnsiConsole.MarkupLine("[dim]  Cleaned up temporary zip file[/]");
         }
         catch
         {
-            AnsiConsole.MarkupLine($"[yellow]  Warning: Could not clean up {publishPath}[/]");
+            AnsiConsole.MarkupLine($"[yellow]  Warning: Could not clean up {zipPath}[/]");
         }
 
         return true;
