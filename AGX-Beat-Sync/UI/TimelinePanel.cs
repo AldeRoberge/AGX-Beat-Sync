@@ -527,6 +527,10 @@ public class TimelinePanel : PanelBase
             _inOutResizeLeft = false;
             _inOutResizeRight = false;
             _inOutRectDragging = false;
+            if (_durationResizeTrack != null)
+            {
+                _nextNoteDurationSeconds = Math.Max(MinNoteDurationSeconds, _durationResizeTrack.GetDuration(_durationResizeEventTime));
+            }
             _durationResizeTrack = null;
             _pendingResizeTrack = null;
             _noteMoveTrack = null;
@@ -943,18 +947,18 @@ public class TimelinePanel : PanelBase
             {
                 var trackArea = GetTrackContentBounds(content);
                 bool alt = Input.IsKeyDown(Keys.LeftAlt) || Input.IsKeyDown(Keys.RightAlt);
-                bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
+                bool ctrlZoom = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
                 if (alt)
                 {
-                    ViewState.Pan(-wheel * 10f);
+                    ViewState!.Pan(-wheel * 10f);
                     ClampViewToTimeRange(content);
                 }
-                else if (ctrl)
+                else if (ctrlZoom)
                 {
                     var trackAreaZoom = GetTrackContentBounds(content);
                     // Multiplicative zoom: finer steps when zoomed out, larger when zoomed in (~15% per tick)
                     float zoomFactor = wheel > 0 ? 1.15f : 1f / 1.15f;
-                    ViewState.ZoomAt(zoomFactor, Input.MousePosition.X, trackAreaZoom.X);
+                    ViewState!.ZoomAt(zoomFactor, Input.MousePosition.X, trackAreaZoom.X);
                     ClampViewToTimeRange(content);
                 }
                 else
@@ -974,7 +978,7 @@ public class TimelinePanel : PanelBase
             // Home/End: jump view to start or end of timeline (FL Studio style)
             if (Input.IsKeyPressed(Keys.Home))
             {
-                ViewState.ViewStartTime = 0;
+                ViewState!.ViewStartTime = 0;
             }
             // I = set In point at playhead (Out = end of song if not set); O = set Out at playhead (In = 0 if not set)
             if (Project != null && Transport != null && (Input.IsKeyPressed(Keys.I) || Input.IsKeyPressed(Keys.O)))
@@ -985,7 +989,7 @@ public class TimelinePanel : PanelBase
                 {
                     Project.InTime = t;
                     if (!Project.OutTime.HasValue)
-                        Project.OutTime = GetTotalTimeRange();
+                        Project!.OutTime = GetTotalTimeRange();
                     else if (Project.OutTime.Value < t)
                         Project.OutTime = t;
                 }
@@ -1002,8 +1006,22 @@ public class TimelinePanel : PanelBase
             {
                 double total = GetTotalTimeRange();
                 var trackArea = GetTrackContentBounds(content);
-                double visibleDuration = trackArea.Width / (double)ViewState.Zoom;
+                double visibleDuration = trackArea.Width / (double)ViewState!.Zoom;
                 ViewState.ViewStartTime = Math.Max(0, total - visibleDuration);
+            }
+
+            // Ctrl+1 = finer grid (more subdivisions); Ctrl+2 = coarser grid (fewer subdivisions)
+            bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
+            if (ctrl && ViewState != null)
+            {
+                if (Input.IsKeyPressed(Keys.D1) || Input.IsKeyPressed(Keys.NumPad1))
+                {
+                    ViewState.GridSubdivisionsPerBeat = Math.Min(ViewState.GridSubdivisionsPerBeat * 2, TimelineViewState.MaxGridSubdivisions);
+                }
+                else if (Input.IsKeyPressed(Keys.D2) || Input.IsKeyPressed(Keys.NumPad2))
+                {
+                    ViewState.GridSubdivisionsPerBeat = Math.Max(ViewState.GridSubdivisionsPerBeat / 2, TimelineViewState.MinGridSubdivisions);
+                }
             }
 
             // Right click: remove in/out in strip, delete event time if on a block, otherwise seek and start right-drag seeking
@@ -1294,17 +1312,21 @@ public class TimelinePanel : PanelBase
         return (track as EventTrackBase)?.GetDuration(eventTime) ?? EventBlockDisplayDuration;
     }
 
-    /// <summary>True if [startTime, startTime+duration] overlaps any event on the track. If excludeEventTime is set, that event is ignored (for move/resize).</summary>
+    /// <summary>Time tolerance for considering two events adjacent (non-overlapping). Allows placing a note exactly next to another.</summary>
+    private const double OverlapEpsilon = 0.0001;
+
+    /// <summary>True if [startTime, startTime+duration] overlaps any event on the track. If excludeEventTime is set, that event is ignored (for move/resize). Touching (adjacent) notes are not considered overlapping.</summary>
     private bool EventsOverlap(IEventTrack track, double startTime, double duration, double? excludeEventTime)
     {
         double endTime = startTime + duration;
         foreach (var et in track.EventTimes)
         {
-            if (excludeEventTime.HasValue && Math.Abs(et - excludeEventTime.Value) < 0.0001)
+            if (excludeEventTime.HasValue && Math.Abs(et - excludeEventTime.Value) < OverlapEpsilon)
                 continue;
             double d = GetEventDuration(track, et);
             double otherEnd = et + d;
-            if (startTime < otherEnd && endTime > et)
+            // Overlap only if ranges cross with a gap (not just touching). Epsilon avoids blocking adjacent placement due to floating point.
+            if (endTime > et + OverlapEpsilon && otherEnd > startTime + OverlapEpsilon)
                 return true;
         }
         return false;
@@ -1547,6 +1569,11 @@ public class TimelinePanel : PanelBase
                 Color handleColor = Darken(trackColor, 0.65f);
                 foreach (var eventTime in track.EventTimes)
                 {
+                    Color noteColor = track is ChangeEntityColorTrack colorTrack
+                        ? ChangeEntityColorTrack.ToXnaColor(colorTrack.GetColor(eventTime))
+                        : trackColor;
+                    Color noteBorderTint = Darken(noteColor, 0.82f);
+                    Color noteHandleColor = Darken(noteColor, 0.65f);
                     double dur = GetEventDuration(track, eventTime);
                     if (eventTime + dur < ViewState.ViewStartTime || eventTime > viewEnd)
                         continue;
@@ -1556,8 +1583,8 @@ public class TimelinePanel : PanelBase
                     int h = LaneHeight - 4;
                     int blockW = (int)Math.Max(2, w);
                     bool selected = Selection != null && Selection.IsNoteSelected(track, eventTime);
-                    Color fillTint = selected ? Lighten(trackColor, 1.35f) : trackColor;
-                    Color selBorderTint = selected ? NoteSelectionOutline : borderTint;
+                    Color fillTint = selected ? Lighten(noteColor, 1.35f) : noteColor;
+                    Color selBorderTint = selected ? NoteSelectionOutline : noteBorderTint;
                     fillTex = selected ? s_noteSelectedFillTexture : s_noteFillTexture;
                     borderTex = selected ? s_noteSelectedBorderTexture : s_noteBorderTexture;
                     int x = (int)fx;
@@ -1575,8 +1602,8 @@ public class TimelinePanel : PanelBase
                         int handleH = h - inset * 2;
                         var leftHandleRect = new Rectangle(x, y + inset, handleW, handleH);
                         var rightHandleRect = new Rectangle(x + blockW - handleW, y + inset, handleW, handleH);
-                        spriteBatch.Draw(s_resizeHandlePillTexture, leftHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), handleColor);
-                        spriteBatch.Draw(s_resizeHandlePillTexture, rightHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), handleColor);
+                        spriteBatch.Draw(s_resizeHandlePillTexture, leftHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), noteHandleColor);
+                        spriteBatch.Draw(s_resizeHandlePillTexture, rightHandleRect, new Rectangle(0, 0, ResizeHandlePillWidth, ResizeHandlePillHeight), noteHandleColor);
                     }
                     else if (blockW >= 6 && h >= 4)
                     {
@@ -1586,7 +1613,7 @@ public class TimelinePanel : PanelBase
                         int totalDotsW = 3 * dotSize + 2 * dotGap;
                         int dotsX = x + (blockW - totalDotsW) / 2;
                         int dotsY = y + (h - dotSize) / 2;
-                        var dotColor = Darken(trackColor, 0.6f);
+                        var dotColor = Darken(noteColor, 0.6f);
                         spriteBatch.Draw(pixel, new Rectangle(dotsX, dotsY, dotSize, dotSize), dotColor);
                         spriteBatch.Draw(pixel, new Rectangle(dotsX + dotSize + dotGap, dotsY, dotSize, dotSize), dotColor);
                         spriteBatch.Draw(pixel, new Rectangle(dotsX + 2 * (dotSize + dotGap), dotsY, dotSize, dotSize), dotColor);
@@ -1609,6 +1636,8 @@ public class TimelinePanel : PanelBase
                     {
                         var baseTrack = _noteMoveTrack as EventTrackBase;
                         Color trackColor = baseTrack?.TrackColor ?? new Color(120, 200, 255);
+                        if (_noteMoveTrack is ChangeEntityColorTrack moveColorTrack)
+                            trackColor = ChangeEntityColorTrack.ToXnaColor(moveColorTrack.GetColor(_noteMoveEventTime));
                         Color borderTint = Darken(trackColor, 0.82f);
                         Color fillTint = Lighten(trackColor, 1.35f);
                         float fx = ViewState.TimeToScreen(_noteMoveEventTime, trackArea.X);
@@ -1636,6 +1665,8 @@ public class TimelinePanel : PanelBase
                     if (time + dur < ViewState.ViewStartTime || time > viewEnd) continue;
                     var baseTrack = track as EventTrackBase;
                     Color trackColor = baseTrack?.TrackColor ?? new Color(120, 200, 255);
+                    if (track is ChangeEntityColorTrack otherColorTrack)
+                        trackColor = ChangeEntityColorTrack.ToXnaColor(otherColorTrack.GetColor(time));
                     float fx = ViewState.TimeToScreen(time, trackArea.X);
                     float w = (float)(dur * ViewState.Zoom);
                     int y = trackArea.Y + visibleRowIndex * LaneHeight + 2;
@@ -1690,8 +1721,8 @@ public class TimelinePanel : PanelBase
         int panelRight = Bounds.Right;
         if (inT.HasValue && outT.HasValue && outT.Value > inT.Value)
         {
-            float inX = ViewState.TimeToScreen(inT.Value, trackArea.X);
-            float outX = ViewState.TimeToScreen(outT.Value, trackArea.X);
+            float inX = ViewState!.TimeToScreen(inT.Value, trackArea.X);
+            float outX = ViewState!.TimeToScreen(outT.Value, trackArea.X);
             var dimColor = new Color(0, 0, 0, 160);
             int leftW = (int)inX - trackArea.X;
             if (leftW > 0)
@@ -1717,8 +1748,8 @@ public class TimelinePanel : PanelBase
         spriteBatch.Draw(pixel, inOutStripBounds, new Color(38, 42, 48));
         if (inT.HasValue && outT.HasValue && outT.Value > inT.Value)
         {
-            float stripInX = ViewState.TimeToScreen(inT.Value, trackArea.X);
-            float stripOutX = ViewState.TimeToScreen(outT.Value, trackArea.X);
+            float stripInX = ViewState!.TimeToScreen(inT.Value, trackArea.X);
+            float stripOutX = ViewState!.TimeToScreen(outT.Value, trackArea.X);
             int rectX = (int)stripInX;
             int rectW = Math.Max(1, (int)stripOutX - rectX);
             // Clamp in/out rectangle to strip so it is not drawn over track list or inspector
@@ -1774,21 +1805,22 @@ public class TimelinePanel : PanelBase
         // Playhead on top of notes (use smoothed display time from game to reduce audio position jitter)
         if (Transport != null)
         {
-            double t = double.IsFinite(PlayheadDisplayTime) ? PlayheadDisplayTime : Transport.CurrentTime;
-            float playheadX = ViewState.TimeToScreen(t, trackArea.X);
+            double t = double.IsFinite(PlayheadDisplayTime) ? PlayheadDisplayTime : Transport!.CurrentTime;
+            float playheadX = ViewState!.TimeToScreen(t, trackArea.X);
             TimelinePlayheadRenderer.Draw(spriteBatch, pixel, content, playheadX);
         }
 
         // Vertical scrollbar for lanes
+        var gd = spriteBatch.GraphicsDevice;
         if (totalLanes > visibleLanes)
         {
             var scrollbar = GetScrollbarBounds(content);
-            spriteBatch.Draw(pixel, scrollbar, new Color(45, 48, 55));
+            ScrollbarRoundedDrawer.DrawRoundedScrollbarTrack(spriteBatch, gd, scrollbar, new Color(45, 48, 55), pixel);
             double range = totalLanes - visibleLanes;
             int thumbHeight = Math.Max(MinScrollbarThumbHeight, (int)(visibleLanes / (double)totalLanes * scrollbar.Height));
             int thumbY = scrollbar.Y + (range > 0 ? (int)(_laneScrollOffset / range * (scrollbar.Height - thumbHeight)) : 0);
             var thumb = new Rectangle(scrollbar.X + 2, thumbY, scrollbar.Width - 4, thumbHeight);
-            spriteBatch.Draw(pixel, thumb, new Color(90, 95, 105));
+            ScrollbarRoundedDrawer.DrawRoundedScrollbar(spriteBatch, gd, thumb, new Color(90, 95, 105));
             // Grip: two lines to show thumb is grabbable
             if (thumbHeight >= 10)
             {
@@ -1803,11 +1835,11 @@ public class TimelinePanel : PanelBase
 
         // Horizontal scrollbar (time / FL Studio style)
         var hBar = GetHorizontalScrollbarBounds(content);
-        spriteBatch.Draw(pixel, hBar, new Color(45, 48, 55));
+        ScrollbarRoundedDrawer.DrawRoundedScrollbarTrack(spriteBatch, gd, hBar, new Color(45, 48, 55), pixel);
         var hThumb = GetHorizontalScrollbarThumbBounds(content);
         if (hThumb.Width > 0)
         {
-            spriteBatch.Draw(pixel, hThumb, new Color(90, 95, 105));
+            ScrollbarRoundedDrawer.DrawRoundedScrollbar(spriteBatch, gd, hThumb, new Color(90, 95, 105));
             var gripColor = new Color(45, 50, 58);
             int gripTop = hThumb.Y + 4;
             int gripH = Math.Max(2, hThumb.Height - 8);

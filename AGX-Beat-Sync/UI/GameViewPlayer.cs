@@ -19,9 +19,12 @@ public sealed class GameViewPlayer
     /// <summary>Facing frame index: 0=right (+X), 1=down (+Z), 2=left (-X), 3=up (-Z).</summary>
     public int Facing { get; private set; }
 
+    /// <summary>Initial offset from world origin so the player is not on top of the enemy cube at (0,0,0).</summary>
+    private const float InitialOffsetZ = 8f;
+
     public GameViewPlayer()
     {
-        Position = new Vector3(0f, Height, 0f);
+        Position = new Vector3(0f, Height, InitialOffsetZ);
         Facing = 1; // down
     }
 

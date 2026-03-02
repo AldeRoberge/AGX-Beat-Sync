@@ -3,6 +3,9 @@ namespace AGX_Beat_Sync.Persistence;
 /// <summary>Serializable snapshot of project and transport for save/load.</summary>
 public class SavedSessionState
 {
+    /// <summary>Metadata for .agxbs files (version, title, description, author, time created, editing time). Null for non-.agxbs saves.</summary>
+    public ProjectMetadata? Metadata { get; set; }
+
     public string AudioFilePath { get; set; } = string.Empty;
     public float BPM { get; set; } = 120f;
     public int TimeSignatureNumerator { get; set; } = 4;

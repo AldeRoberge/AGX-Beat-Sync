@@ -16,10 +16,16 @@ public static class TextTextureHelper
     /// <remarks>Draws white text on transparent (same as BPM/timecode), then copies bitmap ARGB directly to texture.</remarks>
     public static Texture2D? Create(GraphicsDevice device, string text, string fontName = "Segoe UI", int fontSize = 20)
     {
+        return Create(device, text, fontName, fontSize, FontStyle.Regular);
+    }
+
+    /// <summary>Renders the given text to a new Texture2D with the specified font style (e.g. Bold). Returns null on failure.</summary>
+    public static Texture2D? Create(GraphicsDevice device, string text, string fontName, int fontSize, FontStyle fontStyle)
+    {
         if (string.IsNullOrEmpty(text)) return null;
         try
         {
-            using var font = new Font(fontName, fontSize, FontStyle.Regular);
+            using var font = new Font(fontName, fontSize, fontStyle);
             using var measureBmp = new Bitmap(1, 1);
             measureBmp.SetResolution(96, 96);
             using (var mg = System.Drawing.Graphics.FromImage(measureBmp))

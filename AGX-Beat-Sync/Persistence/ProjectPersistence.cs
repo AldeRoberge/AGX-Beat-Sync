@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using AGX_Beat_Sync.Audio;
 using AGX_Beat_Sync.Core;
@@ -32,11 +33,12 @@ public static class ProjectPersistence
     }
 
     /// <summary>Save current project, transport, optional timeline view, layout, camera, and window size to a specific file path (e.g. .agxbs).
-    /// For .agxbs paths: creates a project folder when needed, copies imported music and .agxwf into it, and stores relative audio path.
+    /// For .agxbs paths: creates a project folder when needed, copies imported music and .agxwf into it, stores relative audio path, and writes/preserves metadata (version, title, description, author, time created, total editing time).
+    /// <param name="sessionEditingTimeSeconds">Time spent editing in this session (seconds). For .agxbs this is added to TotalEditingTimeSeconds; pass 0 to skip.</param>
     /// Returns the actual path where the file was written.</summary>
     public static string SaveToFile(Project project, Transport transport, string filePath, TimelineViewState? timelineView = null, int? gameViewHeightPx = null, int? gameViewWidthPx = null, int? inspectorWidthPx = null,
         float? cameraTargetX = null, float? cameraTargetY = null, float? cameraTargetZ = null, float? cameraOrbitYaw = null, float? cameraOrbitPitch = null, float? cameraOrbitDistance = null,
-        int? windowWidthPx = null, int? windowHeightPx = null)
+        int? windowWidthPx = null, int? windowHeightPx = null, double sessionEditingTimeSeconds = 0)
     {
         bool isAgxbs = filePath.EndsWith(".agxbs", StringComparison.OrdinalIgnoreCase);
         string projectDir;
@@ -89,8 +91,50 @@ public static class ProjectPersistence
 
         try
         {
+            ProjectMetadata? metadata = null;
+
+            if (isAgxbs)
+            {
+                if (File.Exists(actualFilePath))
+                {
+                    try
+                    {
+                        var existingJson = File.ReadAllText(actualFilePath);
+                        var existing = JsonSerializer.Deserialize<SavedSessionState>(existingJson, JsonOptions);
+                        if (existing?.Metadata != null)
+                        {
+                            metadata = new ProjectMetadata
+                            {
+                                ProjectFormatVersion = 1,
+                                AppVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
+                                Title = existing.Metadata.Title,
+                                Description = existing.Metadata.Description,
+                                Author = existing.Metadata.Author,
+                                TimeCreatedUtc = existing.Metadata.TimeCreatedUtc,
+                                TotalEditingTimeSeconds = (existing.Metadata.TotalEditingTimeSeconds >= 0 ? existing.Metadata.TotalEditingTimeSeconds : 0) + Math.Max(0, sessionEditingTimeSeconds)
+                            };
+                        }
+                    }
+                    catch
+                    {
+                        // Use defaults for new metadata
+                    }
+                }
+                if (metadata == null)
+                {
+                    metadata = new ProjectMetadata
+                    {
+                        ProjectFormatVersion = 1,
+                        AppVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0",
+                        TimeCreatedUtc = DateTime.UtcNow.ToString("o"),
+                        TotalEditingTimeSeconds = Math.Max(0, sessionEditingTimeSeconds)
+                    };
+                }
+            }
+
             var state = new SavedSessionState
             {
+                Metadata = metadata,
                 AudioFilePath = audioPathInState,
                 BPM = project.BPM,
                 TimeSignatureNumerator = project.TimeSignatureNumerator,

@@ -5,6 +5,7 @@ namespace AGX_Beat_Sync.Audio;
 /// <summary>
 /// Ableton-style metronome: tock on beat 1 (downbeat), tick on beats 2–4.
 /// Call Update each frame when transport is playing and metronome is enabled.
+/// Uses output latency compensation so the audible click aligns with the music.
 /// </summary>
 public class Metronome
 {
@@ -15,16 +16,26 @@ public class Metronome
     public float Volume { get; set; } = 0.7f;
 
     /// <summary>
+    /// Estimated output latency in seconds (audio buffer + playback delay).
+    /// Subtracted from transport time so we trigger when the audible beat crosses, not the read position.
+    /// Typical NAudio WaveOut is ~50–150 ms; default 0.1s. Increase if metronome sounds early.
+    /// </summary>
+    public double OutputLatencySeconds { get; set; } = 0.1;
+
+    /// <summary>
     /// Update metronome: if we crossed a beat boundary, play tick or tock.
     /// Call only when transport is playing and metronome is enabled.
     /// </summary>
     public void Update(double prevTime, double currentTime, Transport transport)
     {
         if (transport.BPM <= 0) return;
+        // Use latency-compensated time so we trigger when the *audible* playback crosses the beat
+        double prev = prevTime - OutputLatencySeconds;
+        double curr = currentTime - OutputLatencySeconds;
         double beatOffset = transport.BeatOffsetSeconds;
         double secondsPerBeat = transport.SecondsPerBeat;
-        double prevBeat = (prevTime - beatOffset) / secondsPerBeat;
-        double currentBeat = (currentTime - beatOffset) / secondsPerBeat;
+        double prevBeat = (prev - beatOffset) / secondsPerBeat;
+        double currentBeat = (curr - beatOffset) / secondsPerBeat;
         long prevBeatIndex = (long)Math.Floor(prevBeat);
         long currentBeatIndex = (long)Math.Floor(currentBeat);
 
@@ -49,7 +60,8 @@ public class Metronome
     /// <summary>Call when user seeks so we don't re-trigger the beat at the seek position.</summary>
     public void SyncToTime(Transport transport)
     {
-        double beat = transport.SecondsToBeat(transport.CurrentTime);
+        double effectiveTime = transport.CurrentTime - OutputLatencySeconds;
+        double beat = transport.SecondsToBeat(effectiveTime);
         _lastTriggeredBeat = (long)Math.Floor(beat);
     }
 }

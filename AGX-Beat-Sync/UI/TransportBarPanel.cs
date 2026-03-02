@@ -57,7 +57,7 @@ public class TransportBarPanel : PanelBase
     /// <summary>Total duration in seconds for progress bar (e.g. from waveform). When 0 or null, bar is empty.</summary>
     public double TotalDurationSeconds { get; set; }
     public Input.InputManager? Input { get; set; }
-    /// <summary>When true, show REC indicator; keys 1-9 and 0 add events to tracks while playing.</summary>
+    /// <summary>When true, show REC indicator; keys 1-9 and 0 add events to tracks at playhead (stopped or while playing).</summary>
     public bool RecordMode { get; set; }
     /// <summary>When true, metronome is on (tock on beat 1, tick on beats 2–4).</summary>
     public bool MetronomeOn { get; set; }
@@ -184,7 +184,7 @@ public class TransportBarPanel : PanelBase
         if (plus.Contains(mouse)) return "BPM +";
         if (GetBpmValueRect().Contains(mouse)) return "BPM — click to edit";
         if (GetPlayPauseButtonRect().Contains(mouse)) return Transport?.IsPlaying == true ? "Pause (Space)" : "Play (Space)";
-        if (GetRecButtonRect().Contains(mouse)) return RecordMode ? "Record mode on (R). Press 1–9 or 0 while playing to add event to track." : "Record mode off (R). Click or press R to enable.";
+        if (GetRecButtonRect().Contains(mouse)) return RecordMode ? "Record mode on (R). Press 1–9 or 0 to add event at playhead to track (works when stopped or playing)." : "Record mode off (R). Click or press R to enable.";
         if (GetMetronomeButtonRect().Contains(mouse)) return MetronomeOn ? "Metronome on — tock on beat 1, tick on beats 2–4" : "Metronome off — click to enable";
         if (GetTimeAreaRect().Contains(mouse)) return "Time — click to go to position";
         if (GetProgressBarRect().Contains(mouse)) return "Drag to move playhead";

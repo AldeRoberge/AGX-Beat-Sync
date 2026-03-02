@@ -176,6 +176,47 @@ public static class InspectorDrawer
             sb.Draw(tex, new Vector2(x, y), tint);
     }
 
+    /// <summary>Measure label text size using the same font as DrawLabel. Used for scrollable content width.</summary>
+    public static (int Width, int Height) MeasureLabel(string text)
+    {
+        string renderText = NormalizeLabelText(text ?? "");
+        if (string.IsNullOrEmpty(renderText)) return (0, 0);
+        try
+        {
+            using var font = CreateLabelFont();
+            if (font == null) return (0, 0);
+            using var bitmap = new Bitmap(1, 1);
+            bitmap.SetResolution(96, 96);
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
+                g.PageUnit = GraphicsUnit.Pixel;
+                g.PageScale = 1f;
+                var size = g.MeasureString(renderText, font);
+                return (Math.Min(MaxLabelTextureSize, (int)Math.Ceiling(size.Width) + 2), Math.Min(MaxLabelTextureSize, (int)Math.Ceiling(size.Height) + 2));
+            }
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    /// <summary>Draw a label with horizontal scroll: only the portion [scrollX, scrollX+visibleWidth) is drawn. Use for wide console lines.</summary>
+    public static void DrawLabelScrollable(SpriteBatch sb, GraphicsDevice device, int x, int y, int visibleWidth, int scrollX, string text, Texture2D? pixel, Color tint)
+    {
+        var tex = GetLabelTexture(device, text);
+        if (tex == null) return;
+        int texW = tex.Width;
+        int texH = tex.Height;
+        if (scrollX >= texW || visibleWidth <= 0) return;
+        int srcX = scrollX;
+        int srcW = Math.Min(visibleWidth, texW - scrollX);
+        var src = new Rectangle(srcX, 0, srcW, texH);
+        var dest = new Rectangle(x, y, srcW, texH);
+        sb.Draw(tex, dest, src, tint);
+    }
+
     /// <summary>Draw a label clipped to maxWidth and maxHeight so it never overflows (e.g. dropdown text). Uses 1:1 source rect so no scaling.</summary>
     public static void DrawLabelClipped(SpriteBatch sb, GraphicsDevice device, int x, int y, int maxWidth, int maxHeight, string text, Texture2D? pixel, Color? tint = null)
     {
@@ -221,30 +262,39 @@ public static class InspectorDrawer
         return 1;
     }
 
-    /// <summary>Draw a foldout row. Returns the row bounds for hit-testing (caller toggles expanded on click).</summary>
-    public static Rectangle DrawFoldout(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, bool expanded, ref int cursorY)
+    /// <summary>Draw a foldout row. Returns the row bounds for hit-testing (caller toggles expanded on click). When canExpand is false (empty section), no arrow is drawn.</summary>
+    public static Rectangle DrawFoldout(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, bool expanded, ref int cursorY, bool canExpand = true)
     {
         int rowH = RowHeight;
         var rowRect = new Rectangle(x, y, w, rowH);
         sb.Draw(pixel, rowRect, SectionBg);
 
-        // Arrow: right when collapsed, down when expanded
-        int ax = x + 4;
-        int ay = y + rowH / 2;
-        if (expanded)
+        if (canExpand)
         {
-            for (int i = 0; i <= 4; i++)
+            // Arrow: right when collapsed, down when expanded
+            int ax = x + 4;
+            int ay = y + rowH / 2;
+            if (expanded)
             {
-                sb.Draw(pixel, new Rectangle(ax + i, ay - 4 + i, 1, 1), FoldoutArrow);
-                sb.Draw(pixel, new Rectangle(ax + i, ay + 4 - i, 1, 1), FoldoutArrow);
+                // Down-pointing triangle: tip at (ax, ay+4), base at top
+                for (int i = 0; i <= 4; i++)
+                {
+                    int rowY = ay - 4 + i;
+                    int halfW = 4 - i;
+                    for (int j = -halfW; j <= halfW; j++)
+                        sb.Draw(pixel, new Rectangle(ax + j, rowY, 1, 1), FoldoutArrow);
+                }
             }
-        }
-        else
-        {
-            for (int i = 0; i <= 4; i++)
+            else
             {
-                sb.Draw(pixel, new Rectangle(ax - 4 + i, ay - i, 1, 1), FoldoutArrow);
-                sb.Draw(pixel, new Rectangle(ax - 4 + i, ay + i, 1, 1), FoldoutArrow);
+                // Right-pointing triangle: tip at (ax+4, ay), base at left
+                for (int i = 0; i <= 4; i++)
+                {
+                    int colX = ax + i;
+                    int halfH = 4 - i;
+                    for (int j = -halfH; j <= halfH; j++)
+                        sb.Draw(pixel, new Rectangle(colX, ay + j, 1, 1), FoldoutArrow);
+                }
             }
         }
 
@@ -262,8 +312,8 @@ public static class InspectorDrawer
         return RowHeight;
     }
 
-    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right with dropdown arrow. Returns the bounds of the value button for hit-testing.</summary>
-    public static Rectangle DrawEnumRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY)
+    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right with optional dropdown arrow. Returns the bounds of the value button for hit-testing. When showDropdownArrow is false (e.g. no options), the arrow is omitted.</summary>
+    public static Rectangle DrawEnumRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showDropdownArrow = true)
     {
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
         DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
@@ -272,12 +322,14 @@ public static class InspectorDrawer
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
         DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
-        // Dropdown arrow (small triangle)
-        int ax = valueRect.Right - 12;
-        int ay = valueRect.Y + valueRect.Height / 2;
-        for (int i = -3; i <= 3; i++)
-            for (int j = 0; j <= 4 - Math.Abs(i); j++)
-                sb.Draw(pixel, new Rectangle(ax + i, ay - 2 + j, 1, 1), FoldoutArrow);
+        if (showDropdownArrow)
+        {
+            int ax = valueRect.Right - 12;
+            int ay = valueRect.Y + valueRect.Height / 2;
+            for (int i = -3; i <= 3; i++)
+                for (int j = 0; j <= 4 - Math.Abs(i); j++)
+                    sb.Draw(pixel, new Rectangle(ax + i, ay - 2 + j, 1, 1), FoldoutArrow);
+        }
         cursorY = y + RowHeight;
         return valueRect;
     }

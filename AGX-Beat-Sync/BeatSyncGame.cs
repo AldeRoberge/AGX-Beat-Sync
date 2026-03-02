@@ -39,17 +39,18 @@ public class BeatSyncGame : Game
     private OpenDialogPanel _openDialogPanel = null!;
     private OptionsDialogPanel _optionsDialogPanel = null!;
     private HeaderBarPanel _headerBarPanel = null!;
-    private EventTrackBase? _pendingDeleteTrack;
-    private List<EventTrackBase>? _pendingDeleteTracks;
     /// <summary>Edit shortcut from KeyDown, processed next Update() so it works when OS consumes the key before poll.</summary>
     private Keys _pendingEditShortcutKey = Keys.None;
     private bool _pendingEditShortcutShift;
     private bool _pendingEditShortcutQueued;
     private readonly object _pendingShortcutLock = new();
+    /// <summary>Win32 subclass for WM_COPY/CUT/PASTE so Ctrl+C/X/V work when OS consumes keys. Installed lazily when HWND is available.</summary>
+    private WindowClipboardHandler? _clipboardHandler;
+    private bool _clipboardHandlerInstallAttempted;
 
     public Project Project { get; }
     public Transport Transport { get; }
-    /// <summary>When true, keys 1-9 and 0 add events to tracks 1-10 while playing. Toggle with R.</summary>
+    /// <summary>When true, keys 1-9 and 0 add events to tracks 1-10 at playhead (stopped or while playing). Toggle with R.</summary>
     public bool RecordMode => _recordMode;
     public InputManager Input { get; } = new();
     public TimelineViewState TimelineView { get; } = new();
@@ -58,6 +59,8 @@ public class BeatSyncGame : Game
     private AudioPlayback _audio = new();
     private WaveformCache _waveformCache = new();
     private string? _currentProjectPath;
+    /// <summary>When the current project session started (UTC). Used to accumulate TotalEditingTimeSeconds on save.</summary>
+    private DateTime _sessionStartTimeUtc;
     /// <summary>Smoothed playhead time for drawing (reduces jitter from discrete audio position updates).</summary>
     private double _playheadDisplayTime;
     /// <summary>Dropped file paths queued from FileDrop event (may be raised on another thread).</summary>
@@ -83,7 +86,7 @@ public class BeatSyncGame : Game
     private double _lastPlaybackTime = -1;
     private readonly Metronome _metronome = new();
 
-    /// <summary>When true, pressing 1-9/0 while playing adds an event at current time to the corresponding track (1=first track, 0=10th). Toggle with R.</summary>
+    /// <summary>When true, pressing 1-9/0 adds an event at playhead to the corresponding track (1=first track, 0=10th); works when stopped or playing. Toggle with R.</summary>
     private bool _recordMode;
     /// <summary>When true, metronome plays tock on beat 1 and tick on beats 2–4 while playing.</summary>
     private bool _metronomeEnabled;
@@ -105,7 +108,8 @@ public class BeatSyncGame : Game
     private int _bottomRowResizeStartWidth;
 
     // CPU / Memory metrics (top right of whole view)
-    private const int MetricsMargin = 8;
+    private const int MetricsMarginRight = 4;
+    private const int MetricsMarginTop = 4;
     private const int MetricsFontSize = 18;       // render at 18; scale to fit max size (aspect preserved)
     private const int MetricsMaxWidth = 260;
     private const int MetricsMaxHeight = 40;
@@ -122,8 +126,12 @@ public class BeatSyncGame : Game
     private float _metricsFps;
     private float _metricsSampleAccum;
     private int _metricsFrameCount;
-    private string _metricsLastString = "";
-    private Texture2D? _metricsTexture;
+    private string _metricsLastFps = "";
+    private string _metricsLastCpu = "";
+    private string _metricsLastMem = "";
+    private Texture2D? _metricsTexFps;
+    private Texture2D? _metricsTexCpu;
+    private Texture2D? _metricsTexMem;
     private Texture2D? _playerTexture;
 
     /// <summary>If set before Run(), the game loads this .agxbs project at startup (e.g. from command line or file association).</summary>
@@ -151,6 +159,7 @@ public class BeatSyncGame : Game
             ProjectPersistence.ApplyState(savedFile, Project, Transport, TimelineView);
             _playheadDisplayTime = Transport.CurrentTime;
             _currentProjectPath = fileToOpen;
+            _sessionStartTimeUtc = DateTime.UtcNow;
             ResolveProjectAudioPath();
             ProjectPersistence.AddRecentProjectPath(fileToOpen);
             _savedGameViewHeightPx = savedFile.GameViewHeightPx;
@@ -199,6 +208,7 @@ public class BeatSyncGame : Game
         }
         else
             EnsureDefaultTracks();
+        _sessionStartTimeUtc = DateTime.UtcNow;
     }
 
     private void EnsureDefaultTracks()
@@ -225,16 +235,21 @@ public class BeatSyncGame : Game
     private IntPtr _cachedHwnd = IntPtr.Zero;
     private bool _cachedHwndResolved;
 
-    /// <summary>Returns the Win32 HWND for our game window. On DesktopGL this comes from SDL_GetWindowWMInfo; otherwise Window.Handle. Returns IntPtr.Zero when on Windows but SDL did not provide an HWND (so foreground/shortcuts fall back to IsActive).</summary>
+    /// <summary>Returns the Win32 HWND for our game window. On DesktopGL this comes from SDL_GetWindowWMInfo; otherwise Window.Handle. Returns IntPtr.Zero when on Windows but SDL did not provide an HWND (so foreground/shortcuts fall back to IsActive). Only caches when we get a valid HWND (or when not Windows) so that early calls from Initialize() before the SDL window exists don't permanently return zero.</summary>
     private IntPtr GetWindowHwnd()
     {
         if (_cachedHwndResolved) return _cachedHwnd;
+        if (OperatingSystem.IsWindows())
+        {
+            if (Window.Handle != IntPtr.Zero && Native.SdlWin32.TryGetHwndFromSdlWindow(Window.Handle, out IntPtr hwnd) && hwnd != IntPtr.Zero)
+            {
+                _cachedHwnd = hwnd;
+                _cachedHwndResolved = true;
+            }
+            return _cachedHwnd;
+        }
+        _cachedHwnd = Window.Handle;
         _cachedHwndResolved = true;
-        if (OperatingSystem.IsWindows() && Native.SdlWin32.TryGetHwndFromSdlWindow(Window.Handle, out IntPtr hwnd))
-            _cachedHwnd = hwnd;
-        else if (!OperatingSystem.IsWindows())
-            _cachedHwnd = Window.Handle;
-        // When on Windows and SDL didn't give us an HWND, leave _cachedHwnd zero so we don't compare HWND to SDL pointer (IsGameWindowForeground would never be true and shortcuts would rely on IsActive only).
         return _cachedHwnd;
     }
 
@@ -333,6 +348,10 @@ public class BeatSyncGame : Game
         InspectorRendererRegistry.Register("ChangeEntityColor", new ChangeEntityColorInspectorRenderer());
         EventTrackRegistry.Register(new EventTrackDescriptor("Screenshake", "Screenshake", () => new ScreenshakeTrack()));
         InspectorRendererRegistry.Register("Screenshake", new ScreenshakeInspectorRenderer());
+        EventTrackRegistry.Register(new EventTrackDescriptor("ChangeWeather", "Change Weather", () => new ChangeWeatherTrack()));
+        InspectorRendererRegistry.Register("ChangeWeather", new ChangeWeatherInspectorRenderer());
+        EventTrackRegistry.Register(new EventTrackDescriptor("Dialogue", "Dialogue", () => new DialogueTrack()));
+        InspectorRendererRegistry.Register("Dialogue", new DialogueInspectorRenderer());
 
         _audio.PlaybackStopped += () =>
         {
@@ -443,6 +462,7 @@ public class BeatSyncGame : Game
                 ApplyLayoutFromSaved(saved);
                 EnsureDefaultTracks();
                 _currentProjectPath = path;
+                _sessionStartTimeUtc = DateTime.UtcNow;
                 ResolveProjectAudioPath();
                 ProjectPersistence.AddRecentProjectPath(path);
                 EngineLogs.Logger.LogInformation("Project opened: {Path}", System.IO.Path.GetFileName(path));
@@ -499,6 +519,7 @@ public class BeatSyncGame : Game
                 ApplyLayoutFromSaved(saved);
                 EnsureDefaultTracks();
                 _currentProjectPath = path;
+                _sessionStartTimeUtc = DateTime.UtcNow;
                 ResolveProjectAudioPath();
                 ProjectPersistence.AddRecentProjectPath(path);
                 EngineLogs.Logger.LogInformation("Project opened: {Path}", System.IO.Path.GetFileName(path));
@@ -530,8 +551,6 @@ public class BeatSyncGame : Game
     private void ApplyOptionsDialogResult()
     {
         _optionsDialogPanel.ClearResult();
-        _pendingDeleteTrack = null;
-        _pendingDeleteTracks = null;
     }
 
     /// <summary>If current project path is set and AudioFilePath is relative, resolve it relative to the project folder.</summary>
@@ -596,10 +615,13 @@ public class BeatSyncGame : Game
         if (string.IsNullOrWhiteSpace(path)) return;
         try
         {
+            double sessionSec = (DateTime.UtcNow - _sessionStartTimeUtc).TotalSeconds;
             var (target, oyaw, opitch, odist) = _gameViewPanel.GetCameraState();
             string actualPath = ProjectPersistence.SaveToFile(Project, Transport, path, TimelineView, _layout.GameViewHeightPx, _layout.GameViewWidthPx, _layout.InspectorWidthPx,
-                target.X, target.Y, target.Z, oyaw, opitch, odist, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+                target.X, target.Y, target.Z, oyaw, opitch, odist, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight, sessionEditingTimeSeconds: sessionSec);
             _currentProjectPath = actualPath;
+            if (actualPath.EndsWith(".agxbs", StringComparison.OrdinalIgnoreCase))
+                _sessionStartTimeUtc = DateTime.UtcNow;
             ProjectPersistence.AddRecentProjectPath(actualPath);
             _pendingSavedPath = actualPath;
             EngineLogs.Logger.LogInformation("Project saved: {Path}", System.IO.Path.GetFileName(actualPath));
@@ -621,10 +643,13 @@ public class BeatSyncGame : Game
 
         try
         {
+            double sessionSec = (DateTime.UtcNow - _sessionStartTimeUtc).TotalSeconds;
             var (target, oyaw, opitch, odist) = _gameViewPanel.GetCameraState();
             string actualPath = ProjectPersistence.SaveToFile(Project, Transport, _currentProjectPath, TimelineView, _layout.GameViewHeightPx, _layout.GameViewWidthPx, _layout.InspectorWidthPx,
-                target.X, target.Y, target.Z, oyaw, opitch, odist, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+                target.X, target.Y, target.Z, oyaw, opitch, odist, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight, sessionEditingTimeSeconds: sessionSec);
             _currentProjectPath = actualPath;
+            if (actualPath.EndsWith(".agxbs", StringComparison.OrdinalIgnoreCase))
+                _sessionStartTimeUtc = DateTime.UtcNow;
             _pendingSavedPath = actualPath;
             EngineLogs.Logger.LogInformation("Project saved: {Path}", System.IO.Path.GetFileName(actualPath));
         }
@@ -675,6 +700,7 @@ public class BeatSyncGame : Game
             }
             _audio.Seek(Transport.CurrentTime);
             _playheadDisplayTime = Transport.CurrentTime;
+            _audio.SetMetronome(_metronomeEnabled, Transport.BPM, Transport.BeatOffsetSeconds, _metronome.Volume);
             if (Transport.IsPlaying)
                 _audio.Play();
             EngineLogs.Logger.LogInformation("Audio loaded: {File} ({Bpm:F1} BPM)", System.IO.Path.GetFileName(path), bpm ?? Transport.BPM);
@@ -728,6 +754,38 @@ public class BeatSyncGame : Game
 
         // Global shortcuts only when no modal dialog and window has focus (Space, Delete, brackets, Ctrl+1/2, Ctrl+Z/Y/C/X/V/S)
         bool shortcutsAllowed = !_openDialogPanel.IsVisible && !_optionsDialogPanel.IsVisible && gameWindowHasFocus;
+
+        // Install Win32 clipboard handler once when HWND is available so WM_COPY/CUT/PASTE (Ctrl+C/X/V) are handled
+        if (!_clipboardHandlerInstallAttempted && OperatingSystem.IsWindows())
+        {
+            IntPtr hwnd = GetWindowHwnd();
+            if (hwnd != IntPtr.Zero)
+            {
+                _clipboardHandlerInstallAttempted = true;
+                _clipboardHandler = new WindowClipboardHandler();
+                if (!_clipboardHandler.Install(hwnd))
+                    _clipboardHandler = null;
+            }
+        }
+
+        // Process pending WM_COPY/CUT/PASTE from Win32 (Ctrl+C/X/V when OS consumes key events)
+        if (shortcutsAllowed && _clipboardHandler != null)
+        {
+            var wmAction = _clipboardHandler.TryTakePendingAction();
+            switch (wmAction)
+            {
+                case PendingClipboardAction.Copy:
+                    _eventConsolePanel.CopySelectionToClipboard();
+                    break;
+                case PendingClipboardAction.Cut:
+                    if (_eventConsolePanel.CopySelectionToClipboard())
+                        _eventConsolePanel.RemoveSelectedEntry();
+                    break;
+                case PendingClipboardAction.Paste:
+                    // Paste: no-op for now; handled so DefWindowProc doesn't do anything else
+                    break;
+            }
+        }
 
         // Process edit shortcut queued from KeyDown first (so it works when OS consumes key before next poll).
         // Allow when no dialog is open (KeyDown only fires when window has key focus, so no need to re-check gameWindowHasFocus).
@@ -895,6 +953,8 @@ public class BeatSyncGame : Game
         {
             _eventFiredSet.Clear();
             _gameViewPanel.ClearSpawnedEntities();
+            _gameViewPanel.SetWeather(WeatherKind.Sunny);
+            _gameViewPanel.ClearDialogueBubble();
             _eventConsolePanel.Clear(clearEngineLogs: false);
         }
 
@@ -908,7 +968,10 @@ public class BeatSyncGame : Game
                 // No audio file, or audio not reporting yet (e.g. first frame after Resume) — advance by game time so playhead doesn't stall
                 Transport.CurrentTime += gameTime.ElapsedGameTime.TotalSeconds;
 
-            if (_metronomeEnabled)
+            // With a loaded file: metronome is mixed into the audio stream (sample-accurate). Otherwise: trigger-based.
+            if (_audio.LoadedFilePath != null)
+                _audio.SetMetronome(_metronomeEnabled, Transport.BPM, Transport.BeatOffsetSeconds, _metronome.Volume);
+            else if (_metronomeEnabled)
                 _metronome.Update(prevTime, Transport.CurrentTime, Transport);
 
             if (Project.InTime is { } inT && Project.OutTime is { } outT && outT > inT)
@@ -962,6 +1025,10 @@ public class BeatSyncGame : Game
                                 ? $"Fired SFX \"{track.DisplayName}\"."
                                 : $"Played SFX \"{track.DisplayName}\" ({sfxTrack.FmodAudioEventPath}).",
                             ScreenshakeTrack shakeTrack => $"Screenshake \"{track.DisplayName}\" (amplitude {shakeTrack.Amplitude:F2}, duration {shakeTrack.Duration:F2}s).",
+                            ChangeWeatherTrack weatherTrack => $"Change weather \"{track.DisplayName}\" to {weatherTrack.GetWeather(eventTime)}.",
+                            DialogueTrack dialogueTrack => string.IsNullOrEmpty(dialogueTrack.GetText(eventTime))
+                                ? $"Dialogue \"{track.DisplayName}\" (no text)."
+                                : $"Dialogue \"{track.DisplayName}\": \"{dialogueTrack.GetText(eventTime)}\".",
                             _ => $"Fired \"{track.DisplayName}\"."
                         };
                         _eventConsolePanel.LogEvent(Transport.CurrentTime, track.DisplayName, message);
@@ -969,6 +1036,10 @@ public class BeatSyncGame : Game
                         {
                             var xnaColor = ChangeEntityColorTrack.ToXnaColor(ct.GetColor(eventTime));
                             _gameViewPanel.SetEnemyCubeColor(xnaColor);
+                        }
+                        else if (track is ChangeWeatherTrack weatherTrack)
+                        {
+                            _gameViewPanel.SetWeather(weatherTrack.GetWeather(eventTime));
                         }
                         else if (track is SpawnEntityTrack spawnTrack)
                         {
@@ -995,14 +1066,20 @@ public class BeatSyncGame : Game
                         {
                             _gameViewPanel.TriggerScreenshake(shakeTrack.Amplitude, shakeTrack.Duration);
                         }
+                        else if (track is DialogueTrack dialogueTrack)
+                        {
+                            string text = dialogueTrack.GetText(eventTime);
+                            double duration = track is EventTrackBase bt ? bt.GetDuration(eventTime) : EventTrackConstants.DefaultEventDurationSeconds;
+                            _gameViewPanel.ShowDialogueBubble(text, duration);
+                        }
                     }
                 }
             }
         }
         _lastPlaybackTime = Transport.CurrentTime;
 
-        // Record mode: 1-9 and 0 add event at current time to track 1-10 while playing (Ctrl not held so Ctrl+1/2 still work)
-        if (Transport.IsPlaying && _recordMode && !ctrl && Project.EventTracks.Count > 0)
+        // Record mode: 1-9 and 0 add event at current/playhead time to track 1-10 (when record mode on; works stopped or while playing) (Ctrl not held so Ctrl+1/2 still work)
+        if (_recordMode && !ctrl && Project.EventTracks.Count > 0)
         {
             int? trackIndex = null;
             if (Input.IsKeyPressed(Keys.D1)) trackIndex = 0;
@@ -1029,10 +1106,21 @@ public class BeatSyncGame : Game
             }
         }
 
-        // Sync back buffer to window size when user resizes
-        var bounds = Window.ClientBounds;
-        int w = Math.Max(320, bounds.Width);
-        int h = Math.Max(240, bounds.Height);
+        // Sync back buffer to window size when user resizes.
+        // When maximized on Windows, use the monitor work area so the status bar stays visible and content aligns with the screen (no taskbar overlap or left offset).
+        int w;
+        int h;
+        if (OperatingSystem.IsWindows() && Native.WindowWorkArea.TryGetMaximizedWorkAreaSize(GetWindowHwnd(), out int workW, out int workH))
+        {
+            w = Math.Max(320, workW);
+            h = Math.Max(240, workH);
+        }
+        else
+        {
+            var bounds = Window.ClientBounds;
+            w = Math.Max(320, bounds.Width);
+            h = Math.Max(240, bounds.Height);
+        }
         if (w != _graphics.PreferredBackBufferWidth || h != _graphics.PreferredBackBufferHeight)
         {
             _graphics.PreferredBackBufferWidth = w;
@@ -1168,6 +1256,7 @@ public class BeatSyncGame : Game
                 ApplyLayoutFromSaved(saved);
                 EnsureDefaultTracks();
                 _currentProjectPath = path;
+                _sessionStartTimeUtc = DateTime.UtcNow;
                 ResolveProjectAudioPath();
                 ProjectPersistence.AddRecentProjectPath(path);
                 if (!string.IsNullOrWhiteSpace(Project.AudioFilePath))
@@ -1340,7 +1429,7 @@ public class BeatSyncGame : Game
         else if (_inspectorPanel.ContainsPoint(Input.MousePosition))
             hoverText = _inspectorPanel.GetHoverText(Input.MousePosition);
         else if (_eventConsolePanel.ContainsPoint(Input.MousePosition))
-            hoverText = "Console — Log level (cycle), Engine / Events toggles; click to select, Ctrl+C to copy";
+            hoverText = "Console — Log level (cycle), Engine / Events toggles; click to select, Ctrl+C to copy; Shift+scroll horizontal";
         else if (_gameViewPanel.ContainsPoint(Input.MousePosition))
             hoverText = _gameViewPanel.GetHoverText(Input.MousePosition);
 
@@ -1536,34 +1625,52 @@ public class BeatSyncGame : Game
     private void DrawMetricsOverlay(GameTime gameTime)
     {
         int viewW = GraphicsDevice.Viewport.Width;
-        string s = $"{(int)Math.Round(_metricsFps)} FPS  CPU: {_metricsCpuPercent:F1}%  Mem: {_metricsMemoryMb} MB";
-        if (s != _metricsLastString)
-        {
-            _metricsTexture?.Dispose();
-            _metricsTexture = TextTextureHelper.Create(GraphicsDevice, s, "Segoe UI", MetricsFontSize);
-            _metricsLastString = s;
-        }
-        if (_metricsTexture == null)
+        string sFps = $"{(int)Math.Round(_metricsFps)} FPS  ";
+        string sCpu = $"CPU: {_metricsCpuPercent:F1}%";
+        string sMem = $"  Mem: {_metricsMemoryMb} MB";
+        if (sFps != _metricsLastFps) { _metricsTexFps?.Dispose(); _metricsTexFps = TextTextureHelper.Create(GraphicsDevice, sFps, "Segoe UI", MetricsFontSize); _metricsLastFps = sFps; }
+        if (sCpu != _metricsLastCpu) { _metricsTexCpu?.Dispose(); _metricsTexCpu = TextTextureHelper.Create(GraphicsDevice, sCpu, "Segoe UI", MetricsFontSize); _metricsLastCpu = sCpu; }
+        if (sMem != _metricsLastMem) { _metricsTexMem?.Dispose(); _metricsTexMem = TextTextureHelper.Create(GraphicsDevice, sMem, "Segoe UI", MetricsFontSize); _metricsLastMem = sMem; }
+        if (_metricsTexFps == null || _metricsTexCpu == null || _metricsTexMem == null)
             return;
-        int tw = _metricsTexture.Width;
-        int th = _metricsTexture.Height;
-        float scale = Math.Min((float)MetricsMaxWidth / tw, (float)MetricsMaxHeight / th);
-        scale = Math.Min(scale, 1f); // never scale up
-        int w = (int)(tw * scale);
-        int h = (int)(th * scale);
-        int x = viewW - MetricsMargin - w;
-        int y = MetricsMargin;
-        var dest = new Rectangle(x, y, w, h);
-        var src = new Rectangle(0, 0, tw, th);
-        bool problematic = _metricsCpuPercent >= MetricsCpuThreshold || _metricsMemoryMb >= MetricsMemoryThresholdMb;
-        byte alpha = (byte)((problematic ? MetricsAlphaHigh : MetricsAlphaLow) * 255);
-        byte gray = (byte)(problematic ? 255 : 130);   // grayed out when not problematic
-        var tint = new Color(gray, gray, gray, alpha);
-        var bgAlpha = (byte)((problematic ? 0.35f : 0.04f) * 255);
-        var bg = new Rectangle(x - 3, y - 1, w + 6, h + 2);
+        bool cpuHigh = _metricsCpuPercent >= MetricsCpuThreshold;
+        bool memHigh = _metricsMemoryMb >= MetricsMemoryThresholdMb;
+        byte alphaNorm = (byte)(MetricsAlphaLow * 255);
+        byte alphaHigh = (byte)(MetricsAlphaHigh * 255);
+        byte grayNorm = 130;
+        byte grayHigh = 255;
+        var tintNorm = new Color(grayNorm, grayNorm, grayNorm, alphaNorm);
+        var tintCpu = new Color(cpuHigh ? grayHigh : grayNorm, cpuHigh ? grayHigh : grayNorm, cpuHigh ? grayHigh : grayNorm, cpuHigh ? alphaHigh : alphaNorm);
+        var tintMem = new Color(memHigh ? grayHigh : grayNorm, memHigh ? grayHigh : grayNorm, memHigh ? grayHigh : grayNorm, memHigh ? alphaHigh : alphaNorm);
+        int totalW = 0;
+        int h = 0;
+        foreach (var t in new[] { _metricsTexFps, _metricsTexCpu, _metricsTexMem })
+        {
+            float scale = Math.Min((float)MetricsMaxWidth / t.Width, (float)MetricsMaxHeight / t.Height);
+            scale = Math.Min(scale, 1f);
+            totalW += (int)(t.Width * scale);
+            int th = (int)(t.Height * scale);
+            if (th > h) h = th;
+        }
+        int x = viewW - MetricsMarginRight - totalW;
+        int y = MetricsMarginTop;
+        bool anyHigh = cpuHigh || memHigh;
+        var bgAlpha = (byte)((anyHigh ? 0.35f : 0.04f) * 255);
+        var bg = new Rectangle(x - 3, y - 1, totalW + 6, h + 2);
         var pixel = PanelBase.GetPixelTexture(GraphicsDevice);
         _spriteBatch.Draw(pixel, bg, new Color((byte)0, (byte)0, (byte)0, bgAlpha));
-        _spriteBatch.Draw(_metricsTexture, dest, src, tint);
+        int dx = x;
+        foreach (var (tex, tint) in new[] { (_metricsTexFps, tintNorm), (_metricsTexCpu, tintCpu), (_metricsTexMem, tintMem) })
+        {
+            float scale = Math.Min((float)MetricsMaxWidth / tex.Width, (float)MetricsMaxHeight / tex.Height);
+            scale = Math.Min(scale, 1f);
+            int w = (int)(tex.Width * scale);
+            int th = (int)(tex.Height * scale);
+            var dest = new Rectangle(dx, y, w, th);
+            var src = new Rectangle(0, 0, tex.Width, tex.Height);
+            _spriteBatch.Draw(tex, dest, src, tint);
+            dx += w;
+        }
     }
 
     protected override void UnloadContent()

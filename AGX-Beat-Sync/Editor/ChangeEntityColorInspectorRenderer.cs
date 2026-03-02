@@ -38,8 +38,19 @@ public class ChangeEntityColorInspectorRenderer : IInspectorRenderer
             displayColor = t.GetColor(first.EventTime);
         }
 
+        // Color preview swatch so the selected color is visible (Red, Green, Blue, etc.)
+        var xnaColor = ChangeEntityColorTrack.ToXnaColor(displayColor);
+        sb.Draw(pixel, new Rectangle(x, y, w, InspectorDrawer.RowHeight), InspectorDrawer.RowBg);
+        InspectorDrawer.DrawLabel(sb, sb.GraphicsDevice, x + InspectorDrawer.Padding, y + 2, "Color", pixel);
+        const int swatchSize = 20;
+        var swatchRect = new Rectangle(x + w - InspectorDrawer.Padding - swatchSize - 80, y + (InspectorDrawer.RowHeight - swatchSize) / 2, swatchSize, swatchSize);
+        sb.Draw(pixel, new Rectangle(swatchRect.X - 1, swatchRect.Y - 1, swatchRect.Width + 2, swatchRect.Height + 2), InspectorDrawer.ControlBorder);
+        sb.Draw(pixel, swatchRect, xnaColor);
+        cursorY = y + InspectorDrawer.RowHeight;
+        y = cursorY;
+
         string colorText = displayColor.ToString();
-        _colorValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Color", colorText, ref cursorY);
+        _colorValueRect = InspectorDrawer.DrawEnumRow(sb, pixel, sb.GraphicsDevice, x, y, w, "Set color", colorText, ref cursorY);
         y = cursorY;
         if (_colorDropdownOpen)
         {

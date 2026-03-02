@@ -3,15 +3,15 @@ using NAudio.Wave;
 namespace AGX_Beat_Sync.Audio;
 
 /// <summary>
-/// Plays short tick (high) and tock (low) tones for the metronome, Ableton-style.
-/// Tock on beat 1, tick on beats 2–4. Uses generated sine bursts.
+/// Plays short tick (low) and tock (high) tones for the metronome, Ableton-style.
+/// Tock (high) on beat 1, tick (low) on beats 2–4. Uses generated sine bursts.
 /// </summary>
 public static class MetronomeSound
 {
     private const int SampleRate = 44100;
     private const double DurationSeconds = 0.04;
-    private const float TickFrequencyHz = 1100f;
-    private const float TockFrequencyHz = 680f;
+    private const float TickFrequencyHz = 680f;
+    private const float TockFrequencyHz = 1100f;
     private const float Amplitude = 0.35f;
 
     private static WaveFormat? _format;
@@ -40,10 +40,10 @@ public static class MetronomeSound
         }
     }
 
-    /// <summary>Play a high "tick" (beats 2, 3, 4).</summary>
+    /// <summary>Play a low "tick" (beats 2, 3, 4).</summary>
     public static void PlayTick(float volume = 1f) => Play(TickBuffer, volume);
 
-    /// <summary>Play a low "tock" (beat 1 / downbeat).</summary>
+    /// <summary>Play a high "tock" (beat 1 / downbeat).</summary>
     public static void PlayTock(float volume = 1f) => Play(TockBuffer, volume);
 
     private static void Play(byte[] buffer, float volume)
@@ -78,5 +78,31 @@ public static class MetronomeSound
         var bytes = new byte[sampleCount * 2];
         Buffer.BlockCopy(samples, 0, bytes, 0, bytes.Length);
         return bytes;
+    }
+
+    /// <summary>Returns tick tone as float samples for mixing into a stream (same sample rate as caller).</summary>
+    public static float[] GetTickSamplesFloat(int sampleRate)
+    {
+        return BuildToneFloat(TickFrequencyHz, sampleRate);
+    }
+
+    /// <summary>Returns tock tone as float samples for mixing into a stream.</summary>
+    public static float[] GetTockSamplesFloat(int sampleRate)
+    {
+        return BuildToneFloat(TockFrequencyHz, sampleRate);
+    }
+
+    private static float[] BuildToneFloat(float frequencyHz, int sampleRate)
+    {
+        int sampleCount = (int)(sampleRate * DurationSeconds);
+        var samples = new float[sampleCount];
+        double omega = 2.0 * Math.PI * frequencyHz / sampleRate;
+        for (int i = 0; i < sampleCount; i++)
+        {
+            double t = (double)i / sampleCount;
+            double envelope = 1.0 - t * t;
+            samples[i] = (float)(Amplitude * Math.Sin(omega * i) * envelope);
+        }
+        return samples;
     }
 }

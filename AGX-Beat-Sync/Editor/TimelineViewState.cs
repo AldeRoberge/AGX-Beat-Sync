@@ -17,7 +17,7 @@ public class TimelineViewState
     public int GridSubdivisionsPerBeat { get; set; } = 4;
 
     public const int MinGridSubdivisions = 1;
-    public const int MaxGridSubdivisions = 32;
+    public const int MaxGridSubdivisions = 128;
 
     /// <summary>Minimum zoom (most zoomed out). Allows scrollbar resize to cover the whole project duration.</summary>
     public float MinZoom => 1f;

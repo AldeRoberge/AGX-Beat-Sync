@@ -10,7 +10,7 @@ namespace AGX_Beat_Sync.UI;
 
 public class InspectorPanel : PanelBase
 {
-    private const int ScrollbarWidth = 12;
+    private const int ScrollbarWidth = 16;
     private const int MinScrollbarThumbHeight = 24;
     private const int InspectorHeaderHeight = 22;
 
@@ -167,7 +167,9 @@ public class InspectorPanel : PanelBase
                 }
                 else if (_trackTypeValueRect.Contains(Input.MousePosition))
                 {
-                    _trackTypeDropdownOpen = !_trackTypeDropdownOpen;
+                    var typesCount = Project != null ? EventTrackRegistry.AllTypes.Count : 0;
+                    if (typesCount > 0)
+                        _trackTypeDropdownOpen = !_trackTypeDropdownOpen;
                     return;
                 }
                 else
@@ -196,8 +198,9 @@ public class InspectorPanel : PanelBase
         }
         else if (ContainsPoint(Input.MousePosition))
         {
-            // Mouse wheel scroll
-            if (Input.ScrollWheelDelta != 0 && contentArea.Contains(Input.MousePosition))
+            // Mouse wheel scroll (positive delta = scroll up = decrease _scrollY)
+            var scrollbarBounds = GetScrollbarBounds(content);
+            if (Input.ScrollWheelDelta != 0 && (contentArea.Contains(Input.MousePosition) || scrollbarBounds.Contains(Input.MousePosition)))
             {
                 _scrollY -= Input.ScrollWheelDelta;
                 _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
@@ -207,18 +210,17 @@ public class InspectorPanel : PanelBase
             if (Input.MouseLeftPressed)
             {
                 var thumb = GetScrollbarThumbBounds(content, scrollableHeight, totalContentHeight);
-                if (GetScrollbarBounds(content).Contains(Input.MousePosition))
+                if (scrollbarBounds.Contains(Input.MousePosition))
                 {
                     if (thumb.Contains(Input.MousePosition))
                         _scrollbarThumbDragging = true;
                     else
                     {
-                        var scrollbar = GetScrollbarBounds(content);
-                        int thumbHeight = Math.Max(MinScrollbarThumbHeight, (int)(scrollableHeight / (double)totalContentHeight * scrollbar.Height));
-                        int travel = scrollbar.Height - thumbHeight;
+                        int thumbHeight = Math.Max(MinScrollbarThumbHeight, (int)(scrollableHeight / (double)totalContentHeight * scrollbarBounds.Height));
+                        int travel = scrollbarBounds.Height - thumbHeight;
                         if (travel > 0)
                         {
-                            int thumbY = Input.MousePosition.Y - scrollbar.Y - thumbHeight / 2;
+                            int thumbY = Input.MousePosition.Y - scrollbarBounds.Y - thumbHeight / 2;
                             _scrollY = (int)(thumbY / (double)travel * maxScroll);
                             _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
                         }
@@ -266,7 +268,8 @@ public class InspectorPanel : PanelBase
                 var currentDesc = types.FirstOrDefault(d => d.TrackTypeId == Selection.SelectedEventTrack.TrackTypeId);
                 string typeDisplay = currentDesc?.DisplayName ?? Selection.SelectedEventTrack.TrackTypeId;
                 int trackTypeCursorY = trackTypeY;
-                _trackTypeValueRect = InspectorDrawer.DrawEnumRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeY, contentArea.Width - InspectorDrawer.Padding * 2, "Track Type", typeDisplay, ref trackTypeCursorY);
+                bool hasTrackTypes = types.Count > 0;
+                _trackTypeValueRect = InspectorDrawer.DrawEnumRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeY, contentArea.Width - InspectorDrawer.Padding * 2, "Track Type", typeDisplay, ref trackTypeCursorY, showDropdownArrow: hasTrackTypes);
                 if (!_trackTypeDropdownOpen)
                     _trackTypeOptionRects = Array.Empty<Rectangle>();
 
@@ -275,7 +278,8 @@ public class InspectorPanel : PanelBase
                 var bodyArea = new Rectangle(contentArea.X, bodyStartY, contentArea.Width, Math.Max(contentArea.Height, 4096));
                 int cursorY = bodyStartY;
                 renderer.Draw(spriteBatch, bodyArea, Selection.SelectedEventTrack, Input, ref cursorY, Selection);
-                _contentHeight = Math.Max(0, cursorY - (contentArea.Y + fixedTop));
+                // Total body height must not depend on _scrollY (cursorY is in scrolled coords)
+                _contentHeight = Math.Max(0, cursorY - bodyStartY);
 
                 // Dropdown on top (drawn in screen space, same scroll)
                 if (_trackTypeDropdownOpen && types.Count > 0)
@@ -298,9 +302,9 @@ public class InspectorPanel : PanelBase
                 if (totalContentHeight > contentArea.Height)
                 {
                     var scrollbar = GetScrollbarBounds(content);
-                    spriteBatch.Draw(pixel, scrollbar, new Color(45, 48, 55));
+                    ScrollbarRoundedDrawer.DrawRoundedScrollbarTrack(spriteBatch, gd, scrollbar, new Color(45, 48, 55), pixel);
                     var thumb = GetScrollbarThumbBounds(content, contentArea.Height, totalContentHeight);
-                    spriteBatch.Draw(pixel, thumb, new Color(90, 95, 105));
+                    ScrollbarRoundedDrawer.DrawRoundedScrollbar(spriteBatch, gd, thumb, new Color(90, 95, 105));
                     if (thumb.Height >= 10)
                     {
                         var gripColor = new Color(45, 50, 58);
@@ -338,7 +342,7 @@ public class InspectorPanel : PanelBase
         int thumbHeight = Math.Max(MinScrollbarThumbHeight, (int)(visibleHeight / (double)totalContentHeight * scrollbar.Height));
         int maxScroll = Math.Max(0, totalContentHeight - visibleHeight);
         int thumbY = scrollbar.Y + (maxScroll > 0 ? (int)(_scrollY / (double)maxScroll * (scrollbar.Height - thumbHeight)) : 0);
-        return new Rectangle(scrollbar.X + 2, thumbY, scrollbar.Width - 4, thumbHeight);
+        return new Rectangle(scrollbar.X + 2, thumbY, Math.Max(4, scrollbar.Width - 4), thumbHeight);
     }
 
     protected override void DrawContent(SpriteBatch spriteBatch)

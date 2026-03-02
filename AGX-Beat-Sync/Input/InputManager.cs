@@ -145,9 +145,10 @@ public class InputManager
         if ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0) into.Add(Keys.RightShift);
         if ((GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0) into.Add(Keys.LeftControl);
         if ((GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0) into.Add(Keys.RightControl);
-        // WASD / QE / C for game view
+        // WASD / QE for game view; A also for Ctrl+A (Select All)
+        int VK_A = 0x41;
         if ((GetAsyncKeyState(0x57) & 0x8000) != 0) into.Add(Keys.W);
-        if ((GetAsyncKeyState(0x41) & 0x8000) != 0) into.Add(Keys.A);
+        if ((GetAsyncKeyState(VK_A) & 0x8000) != 0) into.Add(Keys.A);
         if ((GetAsyncKeyState(0x53) & 0x8000) != 0) into.Add(Keys.S);
         if ((GetAsyncKeyState(0x44) & 0x8000) != 0) into.Add(Keys.D);
         if ((GetAsyncKeyState(0x51) & 0x8000) != 0) into.Add(Keys.Q);

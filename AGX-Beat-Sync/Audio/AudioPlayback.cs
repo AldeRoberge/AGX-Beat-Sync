@@ -1,13 +1,16 @@
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace AGX_Beat_Sync.Audio;
 
 /// <summary>
 /// Loads and plays MP3/WAV via NAudio. Exposes current position for transport sync.
+/// When a file is loaded, metronome can be mixed into the same stream for sample-accurate sync.
 /// </summary>
 public class AudioPlayback : IDisposable
 {
     private AudioFileReader? _reader;
+    private MetronomeMixerSampleProvider? _metronomeMixer;
     private WaveOutEvent? _waveOut;
     private bool _disposed;
     /// <summary>When true, the next PlaybackStopped event is ignored (used to ignore the delayed event from Stop() when we call StopOutputOnly before Seek+Play).</summary>
@@ -50,8 +53,9 @@ public class AudioPlayback : IDisposable
         try
         {
             _reader = new AudioFileReader(filePath);
+            _metronomeMixer = new MetronomeMixerSampleProvider(_reader);
             _waveOut = new WaveOutEvent();
-            _waveOut.Init(_reader);
+            _waveOut.Init(new SampleToWaveProvider16(_metronomeMixer));
             _waveOut.PlaybackStopped += (_, _) =>
             {
                 if (_ignoreNextPlaybackStopped)
@@ -76,9 +80,19 @@ public class AudioPlayback : IDisposable
         _waveOut?.Stop();
         _waveOut?.Dispose();
         _waveOut = null;
+        _metronomeMixer = null;
         _reader?.Dispose();
         _reader = null;
         LoadedFilePath = null;
+    }
+
+    /// <summary>Enable/disable metronome mixed into playback and set BPM/beat offset. Only applies when a file is loaded.</summary>
+    public void SetMetronome(bool enabled, double bpm, double beatOffsetSeconds, float volume = 0.7f)
+    {
+        if (_metronomeMixer == null) return;
+        _metronomeMixer.MetronomeVolume = enabled ? volume : 0f;
+        _metronomeMixer.BPM = bpm;
+        _metronomeMixer.BeatOffsetSeconds = beatOffsetSeconds;
     }
 
     public void Play()

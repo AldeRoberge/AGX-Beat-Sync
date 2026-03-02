@@ -36,11 +36,14 @@ public class EventConsolePanel : PanelBase
     private const int HeaderTogglePadding = 6;
     private const int ToggleChipPaddingH = 10;
     private const int ToggleChipPaddingV = 4;
+    private const int ContextMenuWidth = 100;
 
     private readonly List<string> _eventEntries = new();
     private readonly object _entriesLock = new();
     private int _scrollY;
+    private int _scrollX;
     private int _contentHeight;
+    private int _contentWidth;
     private bool _scrollbarThumbDragging;
     private int _thumbDragStartY;
     private int _scrollStartY;
@@ -57,6 +60,12 @@ public class EventConsolePanel : PanelBase
 
     private bool _levelDropdownOpen;
     private static readonly string[] LevelFilterOptionLabels = { "All", "DBG", "INF", "WRN", "ERR", "FTL" };
+
+    // In-game context menu (MonoGame style)
+    private bool _contextMenuOpen;
+    private int _contextMenuX;
+    private int _contextMenuY;
+    private string? _contextMenuLineToCopy;
 
     // Combined lines for selection/copy: (display text, color, isEvent, eventIndex or -1). Rebuilt each frame from toggles.
     private readonly List<(string Text, Color Color, bool IsEvent, int EventIndex)> _displayLines = new();
@@ -97,8 +106,10 @@ public class EventConsolePanel : PanelBase
         if (clearEngineLogs)
             EngineLogs.Clear();
         _scrollY = 0;
+        _scrollX = 0;
         _selectedIndex = -1;
         _selectAll = false;
+        _contextMenuOpen = false;
         _userAtBottom = true;
     }
 
@@ -153,6 +164,11 @@ public class EventConsolePanel : PanelBase
     }
 
     public InputManager? Input { get; set; }
+
+    private static void CopyLineToClipboard(string text)
+    {
+        try { Clipboard.SetText(text); } catch { }
+    }
 
     private void EnsureDisplayLines()
     {
@@ -229,6 +245,16 @@ public class EventConsolePanel : PanelBase
         int logVisibleHeight = content.Height - ShortcutsLineHeight;
         var logContentRect = new Rectangle(content.X, content.Y + ShortcutsLineHeight, content.Width, logVisibleHeight);
         _contentHeight = _displayLines.Count * LineHeight;
+
+        // Compute max line width for horizontal scroll
+        _contentWidth = Padding;
+        foreach (var d in _displayLines)
+        {
+            var (w, _) = InspectorDrawer.MeasureLabel(d.Text);
+            _contentWidth = Math.Max(_contentWidth, Padding + w);
+        }
+        int maxScrollX = Math.Max(0, _contentWidth - contentWidth);
+        _scrollX = Math.Clamp(_scrollX, 0, maxScrollX);
 
         int maxScroll = Math.Max(0, _contentHeight - logVisibleHeight);
         _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
@@ -311,8 +337,17 @@ public class EventConsolePanel : PanelBase
         {
             if (Input.ScrollWheelDelta != 0)
             {
-                _scrollY -= Input.ScrollWheelDelta;
-                _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
+                bool shift = Input.IsKeyDown(Keys.LeftShift) || Input.IsKeyDown(Keys.RightShift);
+                if (shift)
+                {
+                    _scrollX += Input.ScrollWheelDelta * 40;
+                    _scrollX = Math.Clamp(_scrollX, 0, maxScrollX);
+                }
+                else
+                {
+                    _scrollY -= Input.ScrollWheelDelta;
+                    _scrollY = Math.Clamp(_scrollY, 0, maxScroll);
+                }
             }
             if (Input.MouseLeftPressed)
             {
@@ -339,6 +374,16 @@ public class EventConsolePanel : PanelBase
                 }
             }
 
+            if (Input.MouseRightPressed && logContentRect.Contains(Input.MousePosition))
+            {
+                int lineIndex = (Input.MousePosition.Y - logContentRect.Y + _scrollY) / LineHeight;
+                bool hasLine = lineIndex >= 0 && lineIndex < _displayLines.Count;
+                _contextMenuOpen = true;
+                _contextMenuX = Input.MousePosition.X;
+                _contextMenuY = Input.MousePosition.Y;
+                _contextMenuLineToCopy = hasLine && !string.IsNullOrEmpty(_displayLines[lineIndex].Text) ? _displayLines[lineIndex].Text : null;
+            }
+
             bool ctrl = Input.IsKeyDown(Keys.LeftControl) || Input.IsKeyDown(Keys.RightControl);
             if (ContainsPoint(Input.MousePosition) && ctrl && Input.IsKeyPressed(Keys.C))
             {
@@ -352,6 +397,35 @@ public class EventConsolePanel : PanelBase
                 }
             }
         }
+
+        if (_contextMenuOpen && Input.MouseLeftPressed)
+        {
+            int menuH = 2 * InspectorDrawer.RowHeight;
+            int mx = _contextMenuX;
+            int my = _contextMenuY;
+            if (mx + ContextMenuWidth > Bounds.Right) mx = Bounds.Right - ContextMenuWidth;
+            if (my + menuH > Bounds.Bottom) my = Bounds.Bottom - menuH;
+            if (mx < Bounds.X) mx = Bounds.X;
+            if (my < Bounds.Y) my = Bounds.Y;
+            var menuRect = new Rectangle(mx, my, ContextMenuWidth, menuH);
+            var copyRect = new Rectangle(mx, my, ContextMenuWidth, InspectorDrawer.RowHeight);
+            var clearRect = new Rectangle(mx, my + InspectorDrawer.RowHeight, ContextMenuWidth, InspectorDrawer.RowHeight);
+            var mp = Input.MousePosition;
+            if (copyRect.Contains(mp) && _contextMenuLineToCopy != null)
+            {
+                CopyLineToClipboard(_contextMenuLineToCopy);
+                _contextMenuOpen = false;
+            }
+            else if (clearRect.Contains(mp))
+            {
+                Clear(clearEngineLogs: true);
+                _contextMenuOpen = false;
+            }
+            else if (!menuRect.Contains(mp))
+                _contextMenuOpen = false;
+        }
+        if (_contextMenuOpen && Input.MouseRightPressed)
+            _contextMenuOpen = false;
 
         _userAtBottom = maxScroll <= 0 || _scrollY >= maxScroll;
     }
@@ -451,7 +525,7 @@ public class EventConsolePanel : PanelBase
                     spriteBatch.Draw(pixel, highlightRect, new Color(55, 62, 75));
                 }
                 var line = _displayLines[i];
-                InspectorDrawer.DrawLabel(spriteBatch, device, content.X + Padding, y + 2, line.Text, pixel, line.Color);
+                InspectorDrawer.DrawLabelScrollable(spriteBatch, device, content.X + Padding, y + 2, logAreaWidth, _scrollX, line.Text, pixel, line.Color);
             }
             y = lineBottom;
         }
@@ -461,9 +535,9 @@ public class EventConsolePanel : PanelBase
         if (_contentHeight > logVisibleHeight && content.Width > ScrollbarWidth)
         {
             var scrollbar = GetScrollbarBounds(logContentRect);
-            spriteBatch.Draw(pixel, scrollbar, new Color(42, 45, 50));
+            ScrollbarRoundedDrawer.DrawRoundedScrollbar(spriteBatch, device, scrollbar, new Color(42, 45, 50));
             var thumb = GetThumbBounds(logContentRect, Math.Max(0, _contentHeight - logVisibleHeight));
-            spriteBatch.Draw(pixel, thumb, new Color(65, 70, 78));
+            ScrollbarRoundedDrawer.DrawRoundedScrollbar(spriteBatch, device, thumb, new Color(65, 70, 78));
             if (thumb.Height >= 10)
             {
                 var gripColor = new Color(50, 54, 62);
@@ -473,6 +547,33 @@ public class EventConsolePanel : PanelBase
                 spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY - 2, gripW, 1), gripColor);
                 spriteBatch.Draw(pixel, new Rectangle(gripLeft, centerY + 2, gripW, 1), gripColor);
             }
+        }
+
+        if (_contextMenuOpen)
+        {
+            int menuH = 2 * InspectorDrawer.RowHeight;
+            int mx = _contextMenuX;
+            int my = _contextMenuY;
+            if (mx + ContextMenuWidth > Bounds.Right) mx = Bounds.Right - ContextMenuWidth;
+            if (my + menuH > Bounds.Bottom) my = Bounds.Bottom - menuH;
+            if (mx < Bounds.X) mx = Bounds.X;
+            if (my < Bounds.Y) my = Bounds.Y;
+            var menuRect = new Rectangle(mx, my, ContextMenuWidth, menuH);
+            spriteBatch.Draw(pixel, menuRect, InspectorDrawer.SectionBg);
+            spriteBatch.Draw(pixel, new Rectangle(menuRect.X - 1, menuRect.Y - 1, menuRect.Width + 2, menuRect.Height + 2), InspectorDrawer.ControlBorder);
+            var copyRect = new Rectangle(mx, my, ContextMenuWidth, InspectorDrawer.RowHeight);
+            var clearRect = new Rectangle(mx, my + InspectorDrawer.RowHeight, ContextMenuWidth, InspectorDrawer.RowHeight);
+            var mp = Input?.MousePosition ?? Point.Zero;
+            if (copyRect.Contains(mp))
+                spriteBatch.Draw(pixel, copyRect, InspectorDrawer.DropdownHoverBg);
+            else
+                spriteBatch.Draw(pixel, copyRect, _contextMenuLineToCopy != null ? InspectorDrawer.RowBg : new Color(38, 40, 45));
+            if (clearRect.Contains(mp))
+                spriteBatch.Draw(pixel, clearRect, InspectorDrawer.DropdownHoverBg);
+            else
+                spriteBatch.Draw(pixel, clearRect, InspectorDrawer.RowBg);
+            InspectorDrawer.DrawLabel(spriteBatch, device, mx + InspectorDrawer.Padding, my + 2, "Copy", pixel, _contextMenuLineToCopy != null ? InspectorDrawer.TextColor : new Color(100, 105, 112));
+            InspectorDrawer.DrawLabel(spriteBatch, device, mx + InspectorDrawer.Padding, my + InspectorDrawer.RowHeight + 2, "Clear", pixel, InspectorDrawer.TextColor);
         }
     }
 

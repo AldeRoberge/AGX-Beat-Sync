@@ -546,7 +546,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         y = cursorY;
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
-        _advancedFoldoutRect = InspectorDrawer.DrawFoldout(sb, pixel, sb.GraphicsDevice, x, y, w, "Advanced", _advancedExpanded, ref cursorY);
+        _advancedFoldoutRect = InspectorDrawer.DrawFoldout(sb, pixel, sb.GraphicsDevice, x, y, w, "Advanced", _advancedExpanded, ref cursorY, canExpand: false);
     }
 
     private static void GetVector3ValueRects(int x, int y, int w, out Rectangle[] rects)
@@ -710,7 +710,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 
         if (_advancedFoldoutRect.Contains(pt))
         {
-            _advancedExpanded = !_advancedExpanded;
+            // Advanced section is empty (canExpand: false); do not toggle
             return;
         }
 

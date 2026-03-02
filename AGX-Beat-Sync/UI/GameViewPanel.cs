@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using AGX_Beat_Sync.Core;
+using AGX_Beat_Sync.Services;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using System.Drawing;
 
 namespace AGX_Beat_Sync.UI;
 
@@ -31,6 +33,8 @@ public class SpawnedEntity
     public Vector3 OrbitTangent { get; set; }
     /// <summary>Current orbit angle in radians (only for Orbiting). Advanced by frame dt for smooth motion.</summary>
     public float OrbitAngle { get; set; }
+    /// <summary>Spawn position (for Boomerang: ease out and back to this line).</summary>
+    public Vector3 SpawnPosition { get; set; }
 }
 
 public class GameViewPanel : PanelBase
@@ -52,6 +56,35 @@ public class GameViewPanel : PanelBase
     private float _screenshakeAmplitude;
     private Vector2 _shakeOffset;
     private static readonly Random s_shakeRandom = new();
+
+    /// <summary>Current weather (Rain or Sunny). Set by Change Weather events.</summary>
+    private WeatherKind _weather = WeatherKind.Sunny;
+
+    /// <summary>Active dialogue bubble: text and time (TotalGameTime) until it hides. Null when no bubble.</summary>
+    private (string Text, double ShowUntilTime)? _dialogueBubble;
+
+    /// <summary>Cached bold text texture for the current dialogue text. Disposed when text changes.</summary>
+    private Texture2D? _dialogueTextTexture;
+    private string _dialogueCachedText = "";
+
+    /// <summary>Set the weather. Called when a Change Weather event fires.</summary>
+    public void SetWeather(WeatherKind kind)
+    {
+        _weather = kind;
+    }
+
+    /// <summary>Show a dialogue chat bubble above the enemy. Duration in seconds. Called when a Dialogue event fires.</summary>
+    public void ShowDialogueBubble(string text, double durationSeconds)
+    {
+        double now = Transport?.CurrentTime ?? 0;
+        _dialogueBubble = (text ?? "", now + durationSeconds);
+    }
+
+    /// <summary>Clear the dialogue bubble (e.g. when seeking backward).</summary>
+    public void ClearDialogueBubble()
+    {
+        _dialogueBubble = null;
+    }
 
     /// <summary>Spawn an entity at the given world position with velocity (direction * speed). Called when a Spawn Entity event fires.</summary>
     public void SpawnEntity(Vector3 position, Vector3 rotationEulerRadians, float speed, float lifetime = 5f)
@@ -123,20 +156,23 @@ public class GameViewPanel : PanelBase
         }
         else
         {
-            // Linear (or non-projectile): explicit pattern and zero oscillation/orbit so movement stays linear
-            _spawnedEntities.Add(new SpawnedEntity
+            // Linear, Boomerang, or non-projectile: explicit pattern and zero oscillation/orbit
+            var entity = new SpawnedEntity
             {
                 Position = position,
                 Velocity = d * effectiveSpeed,
                 SpawnTime = (float)(Transport?.CurrentTime ?? 0),
                 Lifetime = lifetime,
                 IsProjectile = isProjectile,
-                DirectionPattern = ProjectileDirectionPattern.Linear,
+                DirectionPattern = isProjectile ? directionPattern : ProjectileDirectionPattern.Linear,
                 InitialDirection = d,
                 Speed = effectiveSpeed,
                 OscillationAmplitude = 0f,
                 OrbitingDistance = 0f
-            });
+            };
+            if (isProjectile && directionPattern == ProjectileDirectionPattern.Boomerang)
+                entity.SpawnPosition = position;
+            _spawnedEntities.Add(entity);
         }
     }
 
@@ -348,9 +384,45 @@ public class GameViewPanel : PanelBase
                     device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, 12);
                 }
             }
+
+            if (_weather == WeatherKind.Rain)
+                DrawRain(device);
         }
 
         device.SetRenderTargets(prevTargets);
+    }
+
+    /// <summary>Draw rain as falling line segments in front of the camera. Uses Transport time for animation.</summary>
+    private void DrawRain(GraphicsDevice device)
+    {
+        if (_effect == null) return;
+        double time = Transport?.CurrentTime ?? 0;
+        const int RainDropCount = 400;
+        const float FallSpeed = 12f;
+        const float DropLength = 0.5f;
+        const float SpreadX = 24f;
+        const float SpreadZ = 24f;
+        const float HeightCycle = 18f;
+        var rainColor = new Color(180, 200, 220, 200);
+        var verts = new VertexPositionColor[RainDropCount * 2];
+        for (int i = 0; i < RainDropCount; i++)
+        {
+            float px = ((i * 1.73f) % SpreadX) - SpreadX * 0.5f;
+            float pz = ((i * 2.31f) % SpreadZ) - SpreadZ * 0.5f;
+            float phase = (float)(time * FallSpeed + i * 0.07) % HeightCycle;
+            float y = 14f - phase;
+            float slantX = 0.02f;
+            float slantZ = 0.03f;
+            var start = new Vector3(px, y, pz);
+            var end = new Vector3(px - slantX, y - DropLength, pz - slantZ);
+            verts[i * 2] = new VertexPositionColor(start, rainColor);
+            verts[i * 2 + 1] = new VertexPositionColor(end, rainColor);
+        }
+        _effect.World = Matrix.Identity;
+        _effect.View = _lastView;
+        _effect.Projection = _lastProjection;
+        _effect.CurrentTechnique.Passes[0].Apply();
+        device.DrawUserPrimitives(PrimitiveType.LineList, verts, 0, RainDropCount);
     }
 
     private void Ensure3DResources(GraphicsDevice device)
@@ -478,7 +550,20 @@ public class GameViewPanel : PanelBase
                 // Small cube: no movement
                 continue;
             }
-            if (e.DirectionPattern == ProjectileDirectionPattern.Oscillation && e.OscillationAmplitude > 0)
+            if (e.DirectionPattern == ProjectileDirectionPattern.Boomerang)
+            {
+                // Smooth ease-out and ease-in: slow to stop at peak, then accelerate back (like a real boomerang)
+                // progress = sin(elapsed/lifetime * PI): 0 -> 1 at mid -> 0 at end; velocity = derivative
+                float t = Math.Clamp(elapsed / e.Lifetime, 0f, 1f);
+                float pi = MathF.PI;
+                float progress = MathF.Sin(t * pi);
+                float maxDistance = e.Speed * e.Lifetime / pi; // so initial velocity magnitude = Speed
+                e.Position = e.SpawnPosition + e.InitialDirection * (maxDistance * progress);
+                float velocityMagnitude = maxDistance * (pi / e.Lifetime) * MathF.Cos(t * pi);
+                e.Velocity = e.InitialDirection * velocityMagnitude;
+                continue;
+            }
+            else if (e.DirectionPattern == ProjectileDirectionPattern.Oscillation && e.OscillationAmplitude > 0)
             {
                 float angleRad = (e.OscillationAmplitude * MathF.PI / 180f) * MathF.Sin(elapsed * 4f);
                 var right = Vector3.Cross(e.InitialDirection, Vector3.UnitY);
@@ -518,6 +603,7 @@ public class GameViewPanel : PanelBase
             DrawPlayerOverlay(spriteBatch, viewport);
             spriteBatch.End();
             spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
+            DrawDialogueBubble(spriteBatch, viewport);
         }
         else
             spriteBatch.Draw(pixel, viewport, new Color(20, 22, 26));
@@ -562,6 +648,65 @@ public class GameViewPanel : PanelBase
         int drawWidth = drawHeight * source.Width / Math.Max(1, source.Height);
         var dest = new Rectangle((int)(viewport.X + sx) - drawWidth / 2, (int)(viewport.Y + sy) - drawHeight, drawWidth, drawHeight);
         spriteBatch.Draw(PlayerTexture, dest, source, Color.White);
+    }
+
+    private void DrawDialogueBubble(SpriteBatch spriteBatch, Rectangle viewport)
+    {
+        if (!_dialogueBubble.HasValue || _lastViewportW <= 0 || _lastViewportH <= 0)
+            return;
+        var (text, showUntil) = _dialogueBubble.Value;
+        double currentTime = Transport?.CurrentTime ?? 0;
+        if (currentTime >= showUntil || string.IsNullOrWhiteSpace(text))
+            return;
+
+        if (!ProjectWorldToScreen(new Vector3(0, 1f, 0), _lastView, _lastProjection, _lastViewportW, _lastViewportH, out float sx, out float sy))
+            return;
+
+        const int padding = 10;
+        const int tailWidth = 16;
+        const int tailHeight = 10;
+        const int gapAboveAnchor = 4;
+        const int bubbleFontSize = 14;
+
+        var device = spriteBatch.GraphicsDevice;
+        if (device == null) return;
+
+        if (_dialogueCachedText != text)
+        {
+            _dialogueTextTexture?.Dispose();
+            _dialogueTextTexture = null;
+            _dialogueCachedText = text;
+        }
+        if (_dialogueTextTexture == null)
+        {
+            _dialogueTextTexture = TextTextureHelper.Create(device, text, "Segoe UI", bubbleFontSize, FontStyle.Bold);
+            if (_dialogueTextTexture == null) return;
+        }
+
+        int textW = _dialogueTextTexture.Width;
+        int textH = _dialogueTextTexture.Height;
+        int bubbleW = Math.Max(textW + padding * 2, tailWidth + padding);
+        int bubbleH = textH + padding * 2;
+
+        int screenX = (int)(viewport.X + sx);
+        int screenY = (int)(viewport.Y + sy);
+        int bubbleLeft = screenX - bubbleW / 2;
+        int bubbleBottom = screenY - gapAboveAnchor;
+        int bubbleTop = bubbleBottom - bubbleH;
+
+        var pixel = GetPixelTexture(device);
+        var black = Color.Black;
+
+        // Bubble body (black background)
+        spriteBatch.Draw(pixel, new Rectangle(bubbleLeft, bubbleTop, bubbleW, bubbleH), black);
+        // Tail: middle-centered, pointing down (small black rect below bubble)
+        int tailLeft = screenX - tailWidth / 2;
+        spriteBatch.Draw(pixel, new Rectangle(tailLeft, bubbleBottom, tailWidth, tailHeight), black);
+
+        // White bold text centered in bubble
+        int textX = bubbleLeft + (bubbleW - textW) / 2;
+        int textY = bubbleTop + (bubbleH - textH) / 2;
+        spriteBatch.Draw(_dialogueTextTexture, new Rectangle(textX, textY, textW, textH), Color.White);
     }
 
     /// <summary>Frame index (0=right, 1=down, 2=left, 3=up) from world facing expressed in camera-relative terms.</summary>
