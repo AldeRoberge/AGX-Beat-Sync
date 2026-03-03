@@ -21,6 +21,7 @@ public class TransportBarPanel : PanelBase
     private const int SliderTrackHeight = 16;
 
     private float _volume = 1f;
+    private float? _volumeBeforeMute;
     private bool _volumeSliderDragging;
     private bool _progressBarDragging;
     /// <summary>Game time until which to show "Volume: N%" in the status bar (set while dragging).</summary>
@@ -177,7 +178,8 @@ public class TransportBarPanel : PanelBase
         if (!ContainsPoint(mouse)) return null;
         var volIcon = GetVolumeIconRect();
         var volTrack = GetVolumeSliderTrack();
-        if (volIcon.Contains(mouse) || volTrack.Contains(mouse)) return "Volume";
+        if (volIcon.Contains(mouse)) return _volume > 0 ? "Volume — click to mute" : "Volume — click to unmute";
+        if (volTrack.Contains(mouse)) return "Volume";
         var minus = GetBpmMinusButton();
         if (minus.Contains(mouse)) return "BPM −";
         var plus = GetBpmPlusButton();
@@ -209,6 +211,7 @@ public class TransportBarPanel : PanelBase
         {
             int mx = Math.Clamp(Input.MousePosition.X, volTrack.X, volTrack.Right);
             Volume = (float)(mx - volTrack.X) / volTrack.Width;
+            _volumeBeforeMute = null;
             _volumeStatusVisibleUntil = gameTime.TotalGameTime.TotalSeconds + 1.5;
         }
 
@@ -235,6 +238,23 @@ public class TransportBarPanel : PanelBase
 
         if (!Input.MouseLeftPressed) return;
         if (!ContainsPoint(Input.MousePosition)) return;
+
+        var volIcon = GetVolumeIconRect();
+        if (volIcon.Contains(Input.MousePosition))
+        {
+            if (_volume > 0)
+            {
+                _volumeBeforeMute = _volume;
+                Volume = 0f;
+            }
+            else
+            {
+                Volume = _volumeBeforeMute ?? 1f;
+                _volumeBeforeMute = null;
+            }
+            _volumeStatusVisibleUntil = gameTime.TotalGameTime.TotalSeconds + 1.5;
+            return;
+        }
 
         if (GetPlayPauseButtonRect().Contains(Input.MousePosition))
         {
@@ -293,7 +313,8 @@ public class TransportBarPanel : PanelBase
 
         // Volume icon + slider (track + fill + thumb)
         var volIconRect = GetVolumeIconRect();
-        DrawVolumeIcon(spriteBatch, pixel, volIconRect, new Color(200, 202, 208));
+        bool muted = _volume <= 0;
+        DrawVolumeIcon(spriteBatch, pixel, volIconRect, muted ? new Color(120, 122, 128) : new Color(200, 202, 208), muted);
         var volTrack = GetVolumeSliderTrack();
         spriteBatch.Draw(pixel, volTrack, new Color(55, 58, 64));
         var fillWidth = (int)(volTrack.Width * _volume);
@@ -665,7 +686,7 @@ public class TransportBarPanel : PanelBase
         spriteBatch.Draw(pixel, new Rectangle(rightX, y, barW, barH), color);
     }
 
-    private static void DrawVolumeIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color)
+    private static void DrawVolumeIcon(SpriteBatch spriteBatch, Texture2D pixel, Rectangle rect, Color color, bool muted = false)
     {
         int x = rect.X;
         int y = rect.Y;
@@ -677,9 +698,21 @@ public class TransportBarPanel : PanelBase
         spriteBatch.Draw(pixel, new Rectangle(x + 1, y + 9, 3, 1), color);
         spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 10, 2, 1), color);
         spriteBatch.Draw(pixel, new Rectangle(x + 2, y + 11, 1, 1), color);
-        // Sound waves ))  — three arcs, expanding to the right
-        spriteBatch.Draw(pixel, new Rectangle(x + 6, y + 6, 1, 4), color);
-        spriteBatch.Draw(pixel, new Rectangle(x + 8, y + 5, 1, 6), color);
-        spriteBatch.Draw(pixel, new Rectangle(x + 10, y + 4, 1, 8), color);
+        if (!muted)
+        {
+            // Sound waves ))  — three arcs, expanding to the right
+            spriteBatch.Draw(pixel, new Rectangle(x + 6, y + 6, 1, 4), color);
+            spriteBatch.Draw(pixel, new Rectangle(x + 8, y + 5, 1, 6), color);
+            spriteBatch.Draw(pixel, new Rectangle(x + 10, y + 4, 1, 8), color);
+        }
+        else
+        {
+            // Muted: X icon over the speaker
+            for (int i = 0; i <= 10; i++)
+            {
+                spriteBatch.Draw(pixel, new Rectangle(x + 3 + i, y + 3 + i, 1, 1), color);
+                spriteBatch.Draw(pixel, new Rectangle(x + 13 - i, y + 3 + i, 1, 1), color);
+            }
+        }
     }
 }

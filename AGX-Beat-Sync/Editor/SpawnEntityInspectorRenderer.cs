@@ -96,6 +96,14 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
     private Rectangle[] _positionValueRects = Array.Empty<Rectangle>();
     private Rectangle[] _rotationValueRects = Array.Empty<Rectangle>();
 
+    // Deferred dropdown draw (one open at a time) so it draws on top of content
+    private bool _hasPendingDropdown;
+    private int _pendingDropdownX, _pendingDropdownY, _pendingDropdownW;
+    private string[] _pendingDropdownOptions = Array.Empty<string>();
+    private int _pendingDropdownSelected;
+    private Point? _pendingDropdownMouse;
+    private string[]? _pendingDropdownIconIds;
+
     private static readonly string[] SpawnEntityKindOptions = Enum.GetNames<SpawnEntityKind>();
     private static readonly string[] PositionModeOptions = Enum.GetNames<PositionMode>();
     private static readonly string[] RotationModeOptions = Enum.GetNames<RotationMode>();
@@ -152,6 +160,7 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         if (track is not SpawnEntityTrack t)
             return;
 
+        _hasPendingDropdown = false;
         var pixel = PanelBase.GetPixelTexture(sb.GraphicsDevice);
         int x = contentArea.X + InspectorDrawer.Padding;
         int y = contentArea.Y + InspectorDrawer.Padding;
@@ -169,8 +178,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         if (_entityKindDropdownOpen)
         {
             int selected = (int)t.EntityKind;
-            (_entityKindDropdownRect, _entityKindOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnEntityKindOptions, selected, ref cursorY, input.MousePosition);
-            y = cursorY;
+            (_entityKindDropdownRect, _entityKindOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, SpawnEntityKindOptions.Length);
+            _hasPendingDropdown = true;
+            _pendingDropdownX = x; _pendingDropdownY = y; _pendingDropdownW = w;
+            _pendingDropdownOptions = SpawnEntityKindOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
         }
         else
             _entityKindOptionRects = Array.Empty<Rectangle>();
@@ -182,8 +193,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         if (_modeDropdownOpen)
         {
             int selected = (int)t.SpawnMode;
-            (_modeDropdownRect, _modeOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnModeOptions, selected, ref cursorY, input.MousePosition);
-            y = cursorY;
+            (_modeDropdownRect, _modeOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, SpawnModeOptions.Length);
+            _hasPendingDropdown = true;
+            _pendingDropdownX = x; _pendingDropdownY = y; _pendingDropdownW = w;
+            _pendingDropdownOptions = SpawnModeOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
         }
         else
             _modeOptionRects = Array.Empty<Rectangle>();
@@ -208,8 +221,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             if (_patternDropdownOpen)
             {
                 int selected = (int)t.Pattern;
-                (_patternDropdownRect, _patternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, SpawnPatternOptions, selected, ref cursorY, input.MousePosition);
-                y = cursorY;
+                (_patternDropdownRect, _patternOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, SpawnPatternOptions.Length);
+                _hasPendingDropdown = true;
+                _pendingDropdownX = x; _pendingDropdownY = y; _pendingDropdownW = w;
+                _pendingDropdownOptions = SpawnPatternOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
             }
             else
                 _patternOptionRects = Array.Empty<Rectangle>();
@@ -345,9 +360,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 
             if (_positionDropdownOpen)
             {
+                int dx = x + InspectorDrawer.Indent, dy = y, dw = w - InspectorDrawer.Indent;
                 int selected = (int)t.PositionMode;
-                (_positionDropdownRect, _positionModeOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x + InspectorDrawer.Indent, y, w - InspectorDrawer.Indent, PositionModeOptions, selected, ref cursorY, input.MousePosition);
-                y = cursorY;
+                (_positionDropdownRect, _positionModeOptionRects) = InspectorDrawer.GetDropdownRects(dx, dy, dw, PositionModeOptions.Length);
+                _hasPendingDropdown = true;
+                _pendingDropdownX = dx; _pendingDropdownY = dy; _pendingDropdownW = dw;
+                _pendingDropdownOptions = PositionModeOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
                 _positionValueRects = Array.Empty<Rectangle>();
             }
             else
@@ -400,9 +418,12 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
 
             if (_rotationDropdownOpen)
             {
+                int dx = x + InspectorDrawer.Indent, dy = y, dw = w - InspectorDrawer.Indent;
                 int selected = (int)t.RotationMode;
-                (_rotationDropdownRect, _rotationModeOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x + InspectorDrawer.Indent, y, w - InspectorDrawer.Indent, RotationModeOptions, selected, ref cursorY, input.MousePosition);
-                y = cursorY;
+                (_rotationDropdownRect, _rotationModeOptionRects) = InspectorDrawer.GetDropdownRects(dx, dy, dw, RotationModeOptions.Length);
+                _hasPendingDropdown = true;
+                _pendingDropdownX = dx; _pendingDropdownY = dy; _pendingDropdownW = dw;
+                _pendingDropdownOptions = RotationModeOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
                 _rotationValueRects = Array.Empty<Rectangle>();
             }
             else
@@ -482,8 +503,10 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
             if (_directionPatternDropdownOpen)
             {
                 int selected = (int)t.DirectionPattern;
-                (_directionPatternDropdownRect, _directionPatternOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ProjectileDirectionPatternOptions, selected, ref cursorY, input.MousePosition);
-                y = cursorY;
+                (_directionPatternDropdownRect, _directionPatternOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, ProjectileDirectionPatternOptions.Length);
+                _hasPendingDropdown = true;
+                _pendingDropdownX = x; _pendingDropdownY = y; _pendingDropdownW = w;
+                _pendingDropdownOptions = ProjectileDirectionPatternOptions; _pendingDropdownSelected = selected; _pendingDropdownMouse = input.MousePosition; _pendingDropdownIconIds = null;
             }
             else
                 _directionPatternOptionRects = Array.Empty<Rectangle>();
@@ -547,6 +570,13 @@ public class SpawnEntityInspectorRenderer : IInspectorRenderer
         InspectorDrawer.DrawSeparator(sb, pixel, x, y, w, ref cursorY);
         y = cursorY;
         _advancedFoldoutRect = InspectorDrawer.DrawFoldout(sb, pixel, sb.GraphicsDevice, x, y, w, "Advanced", _advancedExpanded, ref cursorY, canExpand: false);
+
+        // Draw deferred dropdown on top so it isn't covered by content below
+        if (_hasPendingDropdown && _pendingDropdownOptions.Length > 0)
+        {
+            int dummy = 0;
+            InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, _pendingDropdownX, _pendingDropdownY, _pendingDropdownW, _pendingDropdownOptions, _pendingDropdownSelected, ref dummy, _pendingDropdownMouse, advanceCursor: false, _pendingDropdownIconIds);
+        }
     }
 
     private static void GetVector3ValueRects(int x, int y, int w, out Rectangle[] rects)

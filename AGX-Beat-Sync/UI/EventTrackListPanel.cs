@@ -349,7 +349,12 @@ public class EventTrackListPanel : PanelBase
                 spriteBatch.Draw(pixel, new Rectangle(listArea.X + GrabHandleLeft, line1Y, GrabHandleLineWidth, GrabHandleLineHeight), GrabHandleColor);
                 spriteBatch.Draw(pixel, new Rectangle(listArea.X + GrabHandleLeft, line2Y, GrabHandleLineWidth, GrabHandleLineHeight), GrabHandleColor);
 
-                InspectorDrawer.DrawLabel(spriteBatch, device, listArea.X + GrabHandleLeft + GrabHandleLineWidth + 4, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
+                int iconX = listArea.X + GrabHandleLeft + GrabHandleLineWidth + 4;
+                int iconSize = Math.Min(EventTrackIcons.DefaultSize, TrackRowHeight - 8);
+                int iconY = y + (TrackRowHeight - iconSize) / 2;
+                EventTrackIcons.DrawIcon(spriteBatch, device, iconX, iconY, track.TrackTypeId, iconSize);
+                int labelX = iconX + iconSize + 4;
+                InspectorDrawer.DrawLabel(spriteBatch, device, labelX, y + 4, track.DisplayName.Length > 16 ? track.DisplayName[..16] + "…" : track.DisplayName, pixel);
 
                 // Record mode: show key hint (1–9, 0) for first 10 tracks
                 if (RecordMode && index < 10)

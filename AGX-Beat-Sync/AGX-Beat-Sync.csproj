@@ -19,9 +19,12 @@
         <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
     </ItemGroup>
 
-    <!-- Copy Content to output; game loads player.png at runtime (no MGCB required) -->
+    <!-- Copy Content to output; game loads player.png and Icons/*.png at runtime (no MGCB required) -->
     <ItemGroup>
         <Content Include="Content\player.png" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="Content\Icons\*.png" CopyToOutputDirectory="PreserveNewest">
+      <Link>Content\Icons\%(Filename)%(Extension)</Link>
+    </Content>
     </ItemGroup>
 
     <!-- MonoGame expects embedded Icon.bmp for window/taskbar icon; generate from Icon.png -->

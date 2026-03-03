@@ -81,6 +81,10 @@ public class BeatSyncGame : Game
     private float? _savedCameraOrbitPitch;
     private float? _savedCameraOrbitDistance;
     private readonly AudioLoadCoordinator _audioLoad = new();
+    /// <summary>When non-null, a URL-to-MP3 download is in progress; when completed, result is applied in Update.</summary>
+    private Task<string?>? _urlDownloadTask;
+    private double _urlDownloadProgress;
+
     /// <summary>Fired (trackIndex, eventTime) so we don't double-fire when playback crosses an event time.</summary>
     private readonly HashSet<(int trackIndex, double eventTime)> _eventFiredSet = new();
     private double _lastPlaybackTime = -1;
@@ -107,12 +111,11 @@ public class BeatSyncGame : Game
     private int _bottomRowResizeStartX;
     private int _bottomRowResizeStartWidth;
 
-    // CPU / Memory metrics (top right of whole view)
-    private const int MetricsMarginRight = 4;
-    private const int MetricsMarginTop = 4;
-    private const int MetricsFontSize = 18;       // render at 18; scale to fit max size (aspect preserved)
-    private const int MetricsMaxWidth = 260;
-    private const int MetricsMaxHeight = 40;
+    // CPU / Memory metrics (top right, inside header bar)
+    private const int MetricsMarginRight = 6;
+    private const int MetricsFontSize = 12;       // small so it fits inside header bar
+    private const int MetricsMaxWidth = 200;
+    private const int MetricsMaxHeight = 20;      // fits inside PanelLayout.HeaderBarHeight (28)
     private const float MetricsSampleInterval = 0.25f;
     private const float MetricsAlphaLow = 0.06f;   // more transparent when CPU < 80%
     private const float MetricsAlphaHigh = 0.5f;   // more transparent when CPU >= 80%
@@ -380,6 +383,41 @@ public class BeatSyncGame : Game
         _gameViewPanel.GraphicsDevice = GraphicsDevice;
         _playerTexture = LoadPlayerTexture();
         _gameViewPanel.PlayerTexture = _playerTexture;
+        LoadEventTrackIcons();
+    }
+
+    /// <summary>Load event track type icons from Content/Icons (e.g. Empty.png, SpawnEntity.png) and register them with EventTrackIcons.</summary>
+    private void LoadEventTrackIcons()
+    {
+        foreach (var desc in EventTrackRegistry.AllTypes)
+        {
+            var tex = LoadIconTexture(desc.TrackTypeId);
+            if (tex != null)
+                EventTrackIcons.RegisterIcon(GraphicsDevice, desc.TrackTypeId, tex);
+        }
+    }
+
+    /// <summary>Load a single icon from Content Pipeline (Icons/TrackTypeId) or fallback to Content/Icons/TrackTypeId.png on disk.</summary>
+    private Texture2D? LoadIconTexture(string trackTypeId)
+    {
+        try
+        {
+            return Content.Load<Texture2D>($"Icons/{trackTypeId}");
+        }
+        catch
+        {
+            try
+            {
+                string path = Path.Combine(AppContext.BaseDirectory, "Content", "Icons", $"{trackTypeId}.png");
+                if (File.Exists(path))
+                {
+                    using var stream = File.OpenRead(path);
+                    return Texture2D.FromStream(GraphicsDevice, stream);
+                }
+            }
+            catch { /* ignore */ }
+            return null;
+        }
     }
 
     /// <summary>Load player sprite from Content Pipeline (.xnb) or fallback to Content/player.png on disk.</summary>
@@ -486,6 +524,28 @@ public class BeatSyncGame : Game
             {
                 EngineLogs.Logger.LogDebug("Importing music: {File}", System.IO.Path.GetFileName(path));
                 StartAudioLoad(path, detectBpm: true);
+            }
+            return;
+        }
+        if (_openDialogPanel.DownloadFromUrlRequested)
+        {
+            _openDialogPanel.ClearResult();
+            string? url = null;
+            var t = new Thread(() => { try { url = UrlInputDialog.Show(); } catch { } });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            RestoreWindowFocus();
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                if (UrlToMp3Service.FindDownloader() == null)
+                    _statusBarSavedMessage = "Download failed: install yt-dlp (https://github.com/yt-dlp/yt-dlp)";
+                else
+                {
+                    _urlDownloadProgress = 0;
+                    var progress = new Progress<double>(p => _urlDownloadProgress = p);
+                    _urlDownloadTask = Task.Run(() => UrlToMp3Service.Download(url!, null, progress));
+                }
             }
             return;
         }
@@ -745,6 +805,17 @@ public class BeatSyncGame : Game
         {
             try { ApplyLoadingResult(path, cache, bpm); }
             catch { _audioLoad.Reset(); }
+        }
+
+        if (_urlDownloadTask != null && _urlDownloadTask.IsCompleted)
+        {
+            string? downloadedPath = null;
+            try { downloadedPath = _urlDownloadTask.GetAwaiter().GetResult(); } catch { }
+            _urlDownloadTask = null;
+            if (!string.IsNullOrEmpty(downloadedPath))
+                StartAudioLoad(downloadedPath, detectBpm: true);
+            else
+                _statusBarSavedMessage = "Download failed. Install yt-dlp from https://github.com/yt-dlp/yt-dlp";
         }
 
         ProcessDroppedFiles();
@@ -1440,6 +1511,8 @@ public class BeatSyncGame : Game
             _statusBarSavedMessageUntil = totalSeconds + 3;
             _pendingSavedPath = null;
         }
+        if (_statusBarSavedMessage != null && !_statusBarSavedMessageUntil.HasValue)
+            _statusBarSavedMessageUntil = totalSeconds + 5;
         if (_statusBarSavedMessageUntil.HasValue && totalSeconds >= _statusBarSavedMessageUntil.Value)
         {
             _statusBarSavedMessage = null;
@@ -1588,6 +1661,22 @@ public class BeatSyncGame : Game
             var pixel = PanelBase.GetPixelTexture(GraphicsDevice);
             LoadingOverlay.Draw(_spriteBatch, pixel, GraphicsDevice, _audioLoad.Progress, gameTime);
         }
+        else if (_urlDownloadTask != null)
+        {
+            var pixel = PanelBase.GetPixelTexture(GraphicsDevice);
+            var prevStyle = LoadingOverlay.Style;
+            LoadingOverlay.Style = new LoadingOverlay.LoadingOverlayStyle
+            {
+                Message = "Downloading from URL…",
+                OverlayBackground = prevStyle.OverlayBackground,
+                BarTrack = prevStyle.BarTrack,
+                BarFill = prevStyle.BarFill,
+                BarWidth = prevStyle.BarWidth,
+                BarHeight = prevStyle.BarHeight
+            };
+            LoadingOverlay.Draw(_spriteBatch, pixel, GraphicsDevice, _urlDownloadProgress, gameTime);
+            LoadingOverlay.Style = prevStyle;
+        }
 
         _gameViewPanel.Draw3DScene();
         // Restore viewport/scissor after 3D render so subsequent 2D draws use full back buffer
@@ -1653,10 +1742,10 @@ public class BeatSyncGame : Game
             if (th > h) h = th;
         }
         int x = viewW - MetricsMarginRight - totalW;
-        int y = MetricsMarginTop;
+        int y = (PanelLayout.HeaderBarHeight - h) / 2;   // vertically centered inside top bar
         bool anyHigh = cpuHigh || memHigh;
         var bgAlpha = (byte)((anyHigh ? 0.35f : 0.04f) * 255);
-        var bg = new Rectangle(x - 3, y - 1, totalW + 6, h + 2);
+        var bg = new Rectangle(x - 2, y, totalW + 4, h);
         var pixel = PanelBase.GetPixelTexture(GraphicsDevice);
         _spriteBatch.Draw(pixel, bg, new Color((byte)0, (byte)0, (byte)0, bgAlpha));
         int dx = x;

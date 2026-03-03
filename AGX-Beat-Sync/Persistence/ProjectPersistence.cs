@@ -165,6 +165,8 @@ public static class ProjectPersistence
             {
                 string stateJsonPath = Path.Combine(projectDir, "state.json");
                 try { File.WriteAllText(stateJsonPath, json); } catch { /* non-fatal */ }
+                string backupPath = Path.Combine(projectDir, Path.GetFileNameWithoutExtension(actualFilePath) + ".backup.0.agxbs");
+                try { File.WriteAllText(backupPath, json); } catch { /* non-fatal */ }
             }
             return actualFilePath;
         }

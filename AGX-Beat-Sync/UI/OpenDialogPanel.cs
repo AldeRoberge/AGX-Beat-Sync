@@ -13,7 +13,7 @@ namespace AGX_Beat_Sync.UI;
 public class OpenDialogPanel
 {
     private const int DialogWidth = 420;
-    private const int DialogHeight = 400;
+    private const int DialogHeight = 440;
     private const int Margin = 20;
     private const int SectionGap = 12;
     private const int RowHeight = 24;
@@ -25,6 +25,7 @@ public class OpenDialogPanel
     private Rectangle _dialogBounds;
     private Rectangle _recentListArea;
     private Rectangle _importMusicButton;
+    private Rectangle _downloadFromUrlButton;
     private Rectangle _openProjectButton;
     private Rectangle _cancelButton;
 
@@ -39,6 +40,9 @@ public class OpenDialogPanel
     /// <summary>Set when user clicks Import music; game should show file dialog then clear.</summary>
     public bool BrowseMusicRequested { get; set; }
 
+    /// <summary>Set when user clicks Download from URL; game should show URL dialog then download and clear.</summary>
+    public bool DownloadFromUrlRequested { get; set; }
+
     /// <summary>Set when user clicks Open project; game should show file dialog then clear.</summary>
     public bool BrowseProjectRequested { get; set; }
 
@@ -48,6 +52,7 @@ public class OpenDialogPanel
         _recentPaths.AddRange(ProjectPersistence.GetRecentProjectPaths());
         SelectedProjectPath = null;
         BrowseMusicRequested = false;
+        DownloadFromUrlRequested = false;
         BrowseProjectRequested = false;
         IsVisible = true;
     }
@@ -56,6 +61,7 @@ public class OpenDialogPanel
     {
         SelectedProjectPath = null;
         BrowseMusicRequested = false;
+        DownloadFromUrlRequested = false;
         BrowseProjectRequested = false;
     }
 
@@ -78,6 +84,8 @@ public class OpenDialogPanel
         y += _recentListArea.Height + SectionGap;
 
         _importMusicButton = new Rectangle(_dialogBounds.X + Margin, y, contentW, ButtonHeight);
+        y += ButtonHeight + 8;
+        _downloadFromUrlButton = new Rectangle(_dialogBounds.X + Margin, y, contentW, ButtonHeight);
         y += ButtonHeight + 8;
         _openProjectButton = new Rectangle(_dialogBounds.X + Margin, y, contentW, ButtonHeight);
         y += ButtonHeight + SectionGap;
@@ -106,6 +114,14 @@ public class OpenDialogPanel
         if (_importMusicButton.Contains(mouse))
         {
             BrowseMusicRequested = true;
+            IsVisible = false;
+            return;
+        }
+
+        // Download from URL
+        if (_downloadFromUrlButton.Contains(mouse))
+        {
+            DownloadFromUrlRequested = true;
             IsVisible = false;
             return;
         }
@@ -176,6 +192,10 @@ public class OpenDialogPanel
 
         // Import music button
         DrawButton(spriteBatch, pixel, _importMusicButton, "Import music…");
+        y += ButtonHeight + 8;
+
+        // Download from URL button
+        DrawButton(spriteBatch, pixel, _downloadFromUrlButton, "Download from URL…");
         y += ButtonHeight + 8;
 
         // Open project button

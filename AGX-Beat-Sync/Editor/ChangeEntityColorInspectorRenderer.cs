@@ -55,7 +55,7 @@ public class ChangeEntityColorInspectorRenderer : IInspectorRenderer
         if (_colorDropdownOpen)
         {
             int selected = (int)displayColor;
-            (_colorDropdownRect, _colorOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ColorOptions, selected, ref cursorY, input.MousePosition);
+            (_colorDropdownRect, _colorOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, ColorOptions.Length);
         }
         else
             _colorOptionRects = Array.Empty<Rectangle>();
@@ -63,6 +63,14 @@ public class ChangeEntityColorInspectorRenderer : IInspectorRenderer
         if (!hasNoteSelection)
         {
             InspectorDrawer.DrawRowLabel(sb, pixel, sb.GraphicsDevice, x, y, w, "Select a note to set color", ref cursorY);
+        }
+
+        // Draw dropdown on top so it isn't covered by content below
+        if (_colorDropdownOpen && ColorOptions.Length > 0)
+        {
+            int selected = (int)displayColor;
+            int dummy = 0;
+            InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, ColorOptions, selected, ref dummy, input.MousePosition, advanceCursor: false);
         }
     }
 

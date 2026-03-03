@@ -45,7 +45,7 @@ public class ChangeWeatherInspectorRenderer : IInspectorRenderer
         if (_weatherDropdownOpen)
         {
             int selected = (int)displayWeather;
-            (_weatherDropdownRect, _weatherOptionRects) = InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, WeatherOptions, selected, ref cursorY, input.MousePosition);
+            (_weatherDropdownRect, _weatherOptionRects) = InspectorDrawer.GetDropdownRects(x, y, w, WeatherOptions.Length);
         }
         else
             _weatherOptionRects = Array.Empty<Rectangle>();
@@ -53,6 +53,14 @@ public class ChangeWeatherInspectorRenderer : IInspectorRenderer
         if (!hasNoteSelection)
         {
             InspectorDrawer.DrawRowLabel(sb, pixel, sb.GraphicsDevice, x, y, w, "Select a note to set weather", ref cursorY);
+        }
+
+        // Draw dropdown on top so it isn't covered by content below
+        if (_weatherDropdownOpen && WeatherOptions.Length > 0)
+        {
+            int selected = (int)displayWeather;
+            int dummy = 0;
+            InspectorDrawer.DrawDropdownList(sb, pixel, sb.GraphicsDevice, x, y, w, WeatherOptions, selected, ref dummy, input.MousePosition, advanceCursor: false);
         }
     }
 

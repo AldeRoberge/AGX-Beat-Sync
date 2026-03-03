@@ -312,8 +312,10 @@ public static class InspectorDrawer
         return RowHeight;
     }
 
-    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right with optional dropdown arrow. Returns the bounds of the value button for hit-testing. When showDropdownArrow is false (e.g. no options), the arrow is omitted.</summary>
-    public static Rectangle DrawEnumRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showDropdownArrow = true)
+    private const int TrackTypeIconSize = 16;
+
+    /// <summary>Draw an enum dropdown row: label on left, value (clickable) on right with optional dropdown arrow. Returns the bounds of the value button for hit-testing. When showDropdownArrow is false (e.g. no options), the arrow is omitted. When trackTypeIdForIcon is set, draws the event track icon in the value area.</summary>
+    public static Rectangle DrawEnumRow(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string label, string valueText, ref int cursorY, bool showDropdownArrow = true, string? trackTypeIdForIcon = null)
     {
         sb.Draw(pixel, new Rectangle(x, y, w, RowHeight), RowBg);
         DrawLabel(sb, device, x + Padding, y + 2, label, pixel);
@@ -321,7 +323,15 @@ public static class InspectorDrawer
         var valueRect = new Rectangle(x + w - valueW - Padding, y + 2, valueW, RowHeight - 4);
         sb.Draw(pixel, valueRect, ControlBg);
         sb.Draw(pixel, new Rectangle(valueRect.X - 1, valueRect.Y - 1, valueRect.Width + 2, valueRect.Height + 2), ControlBorder);
-        DrawLabel(sb, device, valueRect.X + 4, valueRect.Y + 1, valueText, pixel);
+        int textLeft = valueRect.X + 4;
+        if (!string.IsNullOrEmpty(trackTypeIdForIcon))
+        {
+            int iconSize = Math.Min(TrackTypeIconSize, valueRect.Height - 2);
+            int iconY = valueRect.Y + (valueRect.Height - iconSize) / 2;
+            EventTrackIcons.DrawIcon(sb, device, valueRect.X + 4, iconY, trackTypeIdForIcon, iconSize, TextColor);
+            textLeft = valueRect.X + 4 + iconSize + 4;
+        }
+        DrawLabel(sb, device, textLeft, valueRect.Y + 1, valueText, pixel);
         if (showDropdownArrow)
         {
             int ax = valueRect.Right - 12;
@@ -334,13 +344,26 @@ public static class InspectorDrawer
         return valueRect;
     }
 
-    /// <summary>Draw an open dropdown list of options below the current cursor. Returns the full dropdown rect and per-option rects for hit-testing. Optional mouse position highlights the option under the cursor.</summary>
-    public static (Rectangle dropdownRect, Rectangle[] optionRects) DrawDropdownList(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string[] options, int selectedIndex, ref int cursorY, Microsoft.Xna.Framework.Point? mouse = null)
+    /// <summary>Compute dropdown and option rects for hit-testing without drawing. Same layout as DrawDropdownList.</summary>
+    public static (Rectangle dropdownRect, Rectangle[] optionRects) GetDropdownRects(int x, int y, int w, int optionCount)
+    {
+        int listH = optionCount * RowHeight;
+        var dropdownRect = new Rectangle(x, y, w, listH);
+        var optionRects = new Rectangle[optionCount];
+        for (int i = 0; i < optionCount; i++)
+            optionRects[i] = new Rectangle(x, y + i * RowHeight, w, RowHeight);
+        return (dropdownRect, optionRects);
+    }
+
+    /// <summary>Draw an open dropdown list of options below the current cursor. Returns the full dropdown rect and per-option rects for hit-testing. Optional mouse position highlights the option under the cursor. When advanceCursor is false, layout is not advanced so the dropdown draws on top of content below. When iconTrackTypeIds is provided (same length as options), each row shows the corresponding track type icon.</summary>
+    public static (Rectangle dropdownRect, Rectangle[] optionRects) DrawDropdownList(SpriteBatch sb, Texture2D pixel, GraphicsDevice device, int x, int y, int w, string[] options, int selectedIndex, ref int cursorY, Microsoft.Xna.Framework.Point? mouse = null, bool advanceCursor = true, string[]? iconTrackTypeIds = null)
     {
         int listH = options.Length * RowHeight;
         var dropdownRect = new Rectangle(x, y, w, listH);
         sb.Draw(pixel, dropdownRect, SectionBg);
         sb.Draw(pixel, new Rectangle(x - 1, y - 1, w + 2, listH + 2), ControlBorder);
+        bool useIcons = iconTrackTypeIds != null && iconTrackTypeIds.Length == options.Length;
+        int iconSize = Math.Min(TrackTypeIconSize, RowHeight - 4);
         var optionRects = new Rectangle[options.Length];
         for (int i = 0; i < options.Length; i++)
         {
@@ -351,9 +374,17 @@ public static class InspectorDrawer
                 sb.Draw(pixel, rowRect, DropdownHoverBg);
             else if (i == selectedIndex)
                 sb.Draw(pixel, rowRect, ControlBg);
-            DrawLabel(sb, device, x + Padding, y + i * RowHeight + 2, options[i], pixel);
+            int textLeft = x + Padding;
+            if (useIcons && !string.IsNullOrEmpty(iconTrackTypeIds![i]))
+            {
+                int iconY = y + i * RowHeight + (RowHeight - iconSize) / 2;
+                EventTrackIcons.DrawIcon(sb, device, x + Padding, iconY, iconTrackTypeIds[i], iconSize, TextColor);
+                textLeft = x + Padding + iconSize + 4;
+            }
+            DrawLabel(sb, device, textLeft, y + i * RowHeight + 2, options[i], pixel);
         }
-        cursorY = y + listH;
+        if (advanceCursor)
+            cursorY = y + listH;
         return (dropdownRect, optionRects);
     }
 

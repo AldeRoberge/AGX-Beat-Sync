@@ -269,7 +269,7 @@ public class InspectorPanel : PanelBase
                 string typeDisplay = currentDesc?.DisplayName ?? Selection.SelectedEventTrack.TrackTypeId;
                 int trackTypeCursorY = trackTypeY;
                 bool hasTrackTypes = types.Count > 0;
-                _trackTypeValueRect = InspectorDrawer.DrawEnumRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeY, contentArea.Width - InspectorDrawer.Padding * 2, "Track Type", typeDisplay, ref trackTypeCursorY, showDropdownArrow: hasTrackTypes);
+                _trackTypeValueRect = InspectorDrawer.DrawEnumRow(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeY, contentArea.Width - InspectorDrawer.Padding * 2, "Track Type", typeDisplay, ref trackTypeCursorY, showDropdownArrow: hasTrackTypes, trackTypeIdForIcon: Selection.SelectedEventTrack.TrackTypeId);
                 if (!_trackTypeDropdownOpen)
                     _trackTypeOptionRects = Array.Empty<Rectangle>();
 
@@ -290,7 +290,8 @@ public class InspectorPanel : PanelBase
                         if (types[i].TrackTypeId == Selection.SelectedEventTrack.TrackTypeId) { selectedIdx = i; break; }
                     }
                     var optionNames = types.Select(t => t.DisplayName).ToArray();
-                    (_, _trackTypeOptionRects) = InspectorDrawer.DrawDropdownList(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeCursorY, contentArea.Width - InspectorDrawer.Padding * 2, optionNames, selectedIdx, ref trackTypeCursorY, Input.MousePosition);
+                    var optionIconIds = types.Select(t => t.TrackTypeId).ToArray();
+                    (_, _trackTypeOptionRects) = InspectorDrawer.DrawDropdownList(spriteBatch, pixel, gd, contentArea.X + InspectorDrawer.Padding, trackTypeCursorY, contentArea.Width - InspectorDrawer.Padding * 2, optionNames, selectedIdx, ref trackTypeCursorY, Input.MousePosition, advanceCursor: false, iconTrackTypeIds: optionIconIds);
                 }
 
                 // Clamp scroll to updated total content height

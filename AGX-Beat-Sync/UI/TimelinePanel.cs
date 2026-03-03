@@ -1748,40 +1748,43 @@ public class TimelinePanel : PanelBase
         spriteBatch.Draw(pixel, inOutStripBounds, new Color(38, 42, 48));
         if (inT.HasValue && outT.HasValue && outT.Value > inT.Value)
         {
-            float stripInX = ViewState!.TimeToScreen(inT.Value, trackArea.X);
-            float stripOutX = ViewState!.TimeToScreen(outT.Value, trackArea.X);
-            int rectX = (int)stripInX;
-            int rectW = Math.Max(1, (int)stripOutX - rectX);
-            // Clamp in/out rectangle to strip so it is not drawn over track list or inspector
+            // Use strip left edge as origin so the in/out rect aligns with the drawn strip (avoids offset when strip is clamped or scrolled)
+            int stripOriginX = inOutStripBounds.X;
+            float stripInX = ViewState!.TimeToScreen(inT.Value, stripOriginX);
+            float stripOutX = ViewState!.TimeToScreen(outT.Value, stripOriginX);
             int stripLeft = inOutStripBounds.X;
             int stripRight = inOutStripBounds.Right;
-            rectX = Math.Max(rectX, stripLeft);
-            rectW = Math.Min(rectX + rectW, stripRight) - rectX;
-            rectW = Math.Max(1, rectW);
-            var inOutColor = new Color(70, 130, 180, 180);
-            spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, rectW, inOutStripBounds.Height), inOutColor);
-            // Gizmos: edge grips (In / Out) and center grip (move range)
-            var gripColor = new Color(40, 75, 110, 220);
-            int gripTop = inOutStripBounds.Y + 3;
-            int gripH = Math.Max(2, inOutStripBounds.Height - 6);
-            int leftGripX = rectX + 2;
-            spriteBatch.Draw(pixel, new Rectangle(leftGripX, gripTop, 1, gripH), gripColor);
-            spriteBatch.Draw(pixel, new Rectangle(leftGripX + 2, gripTop, 1, gripH), gripColor);
-            int rightGripX = rectX + rectW - 3;
-            spriteBatch.Draw(pixel, new Rectangle(rightGripX - 2, gripTop, 1, gripH), gripColor);
-            spriteBatch.Draw(pixel, new Rectangle(rightGripX, gripTop, 1, gripH), gripColor);
-            if (rectW >= 2 * InOutEdgeHandleWidth + 12)
+            // Clamp bar to visible strip: left edge to max(stripLeft), right edge to min(out, stripRight)
+            int rectX = Math.Max((int)stripInX, stripLeft);
+            int rectRight = Math.Min((int)stripOutX, stripRight);
+            int rectW = Math.Max(0, rectRight - rectX);
+            if (rectW > 0)
             {
-                int centerX = rectX + rectW / 2;
-                spriteBatch.Draw(pixel, new Rectangle(centerX - 4, gripTop, 1, gripH), gripColor);
-                spriteBatch.Draw(pixel, new Rectangle(centerX + 3, gripTop, 1, gripH), gripColor);
+                var inOutColor = new Color(70, 130, 180, 180);
+                spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, rectW, inOutStripBounds.Height), inOutColor);
+                // Gizmos: edge grips (In / Out) and center grip (move range)
+                var gripColor = new Color(40, 75, 110, 220);
+                int gripTop = inOutStripBounds.Y + 3;
+                int gripH = Math.Max(2, inOutStripBounds.Height - 6);
+                int leftGripX = rectX + 2;
+                spriteBatch.Draw(pixel, new Rectangle(leftGripX, gripTop, 1, gripH), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(leftGripX + 2, gripTop, 1, gripH), gripColor);
+                int rightGripX = rectX + rectW - 3;
+                spriteBatch.Draw(pixel, new Rectangle(rightGripX - 2, gripTop, 1, gripH), gripColor);
+                spriteBatch.Draw(pixel, new Rectangle(rightGripX, gripTop, 1, gripH), gripColor);
+                if (rectW >= 2 * InOutEdgeHandleWidth + 12)
+                {
+                    int centerX = rectX + rectW / 2;
+                    spriteBatch.Draw(pixel, new Rectangle(centerX - 4, gripTop, 1, gripH), gripColor);
+                    spriteBatch.Draw(pixel, new Rectangle(centerX + 3, gripTop, 1, gripH), gripColor);
+                }
+                var borderColor = new Color(90, 140, 190, 200);
+                int b = 1;
+                spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, rectW, b), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Bottom - b, rectW, b), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
+                spriteBatch.Draw(pixel, new Rectangle(rectX + rectW - b, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
             }
-            var borderColor = new Color(90, 140, 190, 200);
-            int b = 1;
-            spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, rectW, b), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Bottom - b, rectW, b), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rectX, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
-            spriteBatch.Draw(pixel, new Rectangle(rectX + rectW - b, inOutStripBounds.Y, b, inOutStripBounds.Height), borderColor);
         }
         // Playhead strip background (so it reads as its own line below in/out) — only over timeline
         var playheadStripBounds = GetPlayheadStripBounds(content);
