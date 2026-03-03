@@ -1656,11 +1656,11 @@ public class BeatSyncGame : Game
         // CullNone so that when InspectorPanel flushes the batch mid-frame (End/Begin for scissor), the flush doesn't cull 2D sprites
         _spriteBatch.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, null, null, RasterizerState.CullNone);
 
-        // Draw inspector first so its mid-frame End/RT/Begin (when a track is selected) flushes an empty batch; transport, track list, timeline are then drawn and flushed only at the final End(), avoiding a black timeline
-        _inspectorPanel.Draw(_spriteBatch);
+        // Draw transport and timeline first; then track list and inspector on top so notes don't render over them
         _transportBar.Draw(_spriteBatch);
-        _trackListPanel.Draw(_spriteBatch);
         _timelinePanel.Draw(_spriteBatch);
+        _trackListPanel.Draw(_spriteBatch);
+        _inspectorPanel.Draw(_spriteBatch);
 
         // Draw bottom-row divider: horizontal bar above game view + event console for resize grip
         var gripPixel = PanelBase.GetPixelTexture(GraphicsDevice);
