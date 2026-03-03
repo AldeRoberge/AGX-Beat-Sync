@@ -19,6 +19,8 @@ public static class EventTrackConstants
 [JsonDerivedType(typeof(SpawnEntityTrack), typeDiscriminator: "SpawnEntity")]
 [JsonDerivedType(typeof(SfxTrack), typeDiscriminator: "SFX")]
 [JsonDerivedType(typeof(ChangeEntityColorTrack), typeDiscriminator: "ChangeEntityColor")]
+[JsonDerivedType(typeof(ChangeEntityMovementTrack), typeDiscriminator: "ChangeEntityMovement")]
+[JsonDerivedType(typeof(ChangeTilesTrack), typeDiscriminator: "ChangeTiles")]
 [JsonDerivedType(typeof(ScreenshakeTrack), typeDiscriminator: "Screenshake")]
 [JsonDerivedType(typeof(ChangeWeatherTrack), typeDiscriminator: "ChangeWeather")]
 [JsonDerivedType(typeof(DialogueTrack), typeDiscriminator: "Dialogue")]

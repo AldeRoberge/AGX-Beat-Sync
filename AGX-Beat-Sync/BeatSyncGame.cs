@@ -349,6 +349,10 @@ public class BeatSyncGame : Game
         InspectorRendererRegistry.Register("SFX", new SfxInspectorRenderer());
         EventTrackRegistry.Register(new EventTrackDescriptor("ChangeEntityColor", "Change Entity Color", () => new ChangeEntityColorTrack()));
         InspectorRendererRegistry.Register("ChangeEntityColor", new ChangeEntityColorInspectorRenderer());
+        EventTrackRegistry.Register(new EventTrackDescriptor("ChangeEntityMovement", "Change Entity Movement", () => new ChangeEntityMovementTrack()));
+        InspectorRendererRegistry.Register("ChangeEntityMovement", new ChangeEntityMovementInspectorRenderer());
+        EventTrackRegistry.Register(new EventTrackDescriptor("ChangeTiles", "Change Tiles", () => new ChangeTilesTrack()));
+        InspectorRendererRegistry.Register("ChangeTiles", new ChangeTilesInspectorRenderer());
         EventTrackRegistry.Register(new EventTrackDescriptor("Screenshake", "Screenshake", () => new ScreenshakeTrack()));
         InspectorRendererRegistry.Register("Screenshake", new ScreenshakeInspectorRenderer());
         EventTrackRegistry.Register(new EventTrackDescriptor("ChangeWeather", "Change Weather", () => new ChangeWeatherTrack()));
@@ -1091,6 +1095,8 @@ public class BeatSyncGame : Game
                         string message = track switch
                         {
                             ChangeEntityColorTrack colorTrack => $"Changed entity \"{track.DisplayName}\" color to {colorTrack.GetColor(eventTime)}.",
+                            ChangeEntityMovementTrack movementTrack => $"Changed entity \"{track.DisplayName}\" movement to {movementTrack.GetMovement(eventTime)}.",
+                            ChangeTilesTrack tilesTrack => $"Change tiles \"{track.DisplayName}\" to {tilesTrack.GetShape(eventTime)}.",
                             SpawnEntityTrack spawnTrack => $"Spawned entity \"{track.DisplayName}\" ({spawnTrack.EntityKind}, count {(spawnTrack.SpawnMode == SpawnMode.Single ? 1 : spawnTrack.Count)}).",
                             SfxTrack sfxTrack => string.IsNullOrEmpty(sfxTrack.FmodAudioEventPath)
                                 ? $"Fired SFX \"{track.DisplayName}\"."
@@ -1107,6 +1113,14 @@ public class BeatSyncGame : Game
                         {
                             var xnaColor = ChangeEntityColorTrack.ToXnaColor(ct.GetColor(eventTime));
                             _gameViewPanel.SetEnemyCubeColor(xnaColor);
+                        }
+                        else if (track is ChangeEntityMovementTrack mt)
+                        {
+                            _gameViewPanel.SetEnemyMovement(mt.GetMovement(eventTime));
+                        }
+                        else if (track is ChangeTilesTrack tilesTrack)
+                        {
+                            _gameViewPanel.SetTileShape(tilesTrack.GetShape(eventTime));
                         }
                         else if (track is ChangeWeatherTrack weatherTrack)
                         {

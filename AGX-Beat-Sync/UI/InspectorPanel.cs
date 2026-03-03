@@ -147,6 +147,10 @@ public class InspectorPanel : PanelBase
                                     newBase.EventDurations = new Dictionary<double, double>(selectedTrack.EventDurations);
                                     if (newTrack is ChangeEntityColorTrack newColorTrack && selectedTrack is ChangeEntityColorTrack oldColorTrack)
                                         newColorTrack.EventColors = new Dictionary<double, EntityColor>(oldColorTrack.EventColors);
+                                    if (newTrack is ChangeEntityMovementTrack newMovementTrack && selectedTrack is ChangeEntityMovementTrack oldMovementTrack)
+                                        newMovementTrack.EventMovements = new Dictionary<double, EntityMovementKind>(oldMovementTrack.EventMovements);
+                                    if (newTrack is ChangeTilesTrack newTilesTrack && selectedTrack is ChangeTilesTrack oldTilesTrack)
+                                        newTilesTrack.EventShapes = new Dictionary<double, ChangeTilesShape>(oldTilesTrack.EventShapes);
                                 }
                                 int idx = Project.EventTracks.IndexOf(selectedTrack);
                                 if (idx >= 0)

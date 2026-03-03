@@ -453,14 +453,18 @@ public class EventConsolePanel : PanelBase
         bool eventsOn = ShowEvents;
         Color eventsBg = eventsOn ? new Color(65, 115, 165) : new Color(55, 58, 65);
         spriteBatch.Draw(pixel, eventsRect, eventsBg);
-        InspectorDrawer.DrawLabel(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, "Events", pixel, eventsOn ? new Color(255, 255, 255) : new Color(160, 165, 175));
+        int eventsTextW = eventsRect.Width - ToggleChipPaddingH * 2;
+        int eventsTextH = HeaderToggleHeight - ToggleChipPaddingV * 2;
+        InspectorDrawer.DrawLabelScaledToFit(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, eventsTextW, eventsTextH, "Events", pixel, eventsOn ? new Color(255, 255, 255) : new Color(160, 165, 175));
 
         x -= ToggleChipPaddingH + 52 + 4;
         var engineRect = new Rectangle(x, toggleY, 52 + ToggleChipPaddingH * 2, HeaderToggleHeight);
         bool engineOn = ShowEngine;
         Color engineBg = engineOn ? new Color(70, 130, 100) : new Color(55, 58, 65);
         spriteBatch.Draw(pixel, engineRect, engineBg);
-        InspectorDrawer.DrawLabel(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, "Engine", pixel, engineOn ? new Color(255, 255, 255) : new Color(160, 165, 175));
+        int engineTextW = engineRect.Width - ToggleChipPaddingH * 2;
+        int engineTextH = HeaderToggleHeight - ToggleChipPaddingV * 2;
+        InspectorDrawer.DrawLabelScaledToFit(spriteBatch, device, x + ToggleChipPaddingH, toggleY + ToggleChipPaddingV, engineTextW, engineTextH, "Engine", pixel, engineOn ? new Color(255, 255, 255) : new Color(160, 165, 175));
 
         x -= levelChipW + 4;
         var levelRect = new Rectangle(x, toggleY, levelChipW, HeaderToggleHeight);

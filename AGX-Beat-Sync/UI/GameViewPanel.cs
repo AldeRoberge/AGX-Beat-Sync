@@ -60,6 +60,12 @@ public class GameViewPanel : PanelBase
     /// <summary>Current weather (Rain or Sunny). Set by Change Weather events.</summary>
     private WeatherKind _weather = WeatherKind.Sunny;
 
+    /// <summary>Accumulated real time for rain animation. Updated every frame for smooth 60+ fps rain.</summary>
+    private double _rainAnimationTime;
+
+    /// <summary>Current tile shape (Circle, Square, Line, Cone). Set by Change Tiles events.</summary>
+    private ChangeTilesShape _tileShape = ChangeTilesShape.Circle;
+
     /// <summary>Active dialogue bubble: text and time (TotalGameTime) until it hides. Null when no bubble.</summary>
     private (string Text, double ShowUntilTime)? _dialogueBubble;
 
@@ -71,6 +77,12 @@ public class GameViewPanel : PanelBase
     public void SetWeather(WeatherKind kind)
     {
         _weather = kind;
+    }
+
+    /// <summary>Set the tile shape (Circle, Square, Line, Cone). Called when a Change Tiles event fires.</summary>
+    public void SetTileShape(ChangeTilesShape shape)
+    {
+        _tileShape = shape;
     }
 
     /// <summary>Show a dialogue chat bubble above the enemy. Duration in seconds. Called when a Dialogue event fires.</summary>
@@ -210,11 +222,13 @@ public class GameViewPanel : PanelBase
         return "Game View";
     }
 
-    /// <summary>Clear all spawned entities (e.g. when user seeks or stops).</summary>
+    /// <summary>Clear all spawned entities and reset enemy state (e.g. when user seeks or stops).</summary>
     public void ClearSpawnedEntities()
     {
         _spawnedEntities.Clear();
         _screenshakeRemaining = 0f;
+        _enemyCubePosition = Vector3.Zero;
+        _enemyMovementKind = EntityMovementKind.Stationary;
     }
 
     /// <summary>Trigger a screenshake (called when a Screenshake event fires). New shake overwrites any current shake.</summary>
@@ -258,12 +272,26 @@ public class GameViewPanel : PanelBase
     private int _gridLineCount;
     private Color _enemyCubeColor = new Color(200, 80, 80);
 
+    /// <summary>Enemy cube position. Updated by movement logic.</summary>
+    private Vector3 _enemyCubePosition = Vector3.Zero;
+    /// <summary>Enemy cube movement mode. Set by Change Entity Movement events.</summary>
+    private EntityMovementKind _enemyMovementKind = EntityMovementKind.Stationary;
+    private float _enemyOrbitAngle;
+    private float _enemyWanderPhase;
+    private static readonly Random s_enemyWanderRandom = new();
+
     /// <summary>Set the entity (enemy cube) color. Called when a Change Entity Color event fires.</summary>
     public void SetEnemyCubeColor(Color color)
     {
         _enemyCubeColor = color;
         if (_cubeBuffer != null)
             RebuildEnemyCubeBuffer();
+    }
+
+    /// <summary>Set the entity (enemy cube) movement mode. Called when a Change Entity Movement event fires.</summary>
+    public void SetEnemyMovement(EntityMovementKind kind)
+    {
+        _enemyMovementKind = kind;
     }
 
     private VertexPositionColor[] BuildEnemyCubeVertices(float h)
@@ -352,8 +380,8 @@ public class GameViewPanel : PanelBase
                 device.DrawPrimitives(PrimitiveType.LineList, 0, _gridLineCount);
             }
 
-            // Enemy cube at world origin
-            _effect.World = Matrix.CreateTranslation(Vector3.Zero);
+            // Enemy cube (position updated by movement logic)
+            _effect.World = Matrix.CreateTranslation(_enemyCubePosition);
             _effect.CurrentTechnique.Passes[0].Apply();
             device.SetVertexBuffer(_cubeBuffer);
             device.Indices = _cubeIndices;
@@ -392,11 +420,11 @@ public class GameViewPanel : PanelBase
         device.SetRenderTargets(prevTargets);
     }
 
-    /// <summary>Draw rain as falling line segments in front of the camera. Uses Transport time for animation.</summary>
+    /// <summary>Draw rain as falling line segments in front of the camera. Uses per-frame animation time for smooth 60+ fps.</summary>
     private void DrawRain(GraphicsDevice device)
     {
         if (_effect == null) return;
-        double time = Transport?.CurrentTime ?? 0;
+        double time = _rainAnimationTime;
         const int RainDropCount = 400;
         const float FallSpeed = 12f;
         const float DropLength = 0.5f;
@@ -509,6 +537,57 @@ public class GameViewPanel : PanelBase
         _gridBuffer.SetData(gridVerts.ToArray());
     }
 
+    private void UpdateEnemyMovement(float dt)
+    {
+        const float circleRadius = 3f;
+        const float circleSpeed = 1f;
+        const float wanderSpeed = 2f;
+        const float wanderRadius = 6f;
+        const float chaseSpeed = 4f;
+        const float hoverAmplitude = 0.4f;
+        const float hoverFreq = 3f;
+
+        switch (_enemyMovementKind)
+        {
+            case EntityMovementKind.Stationary:
+                break;
+            case EntityMovementKind.Circle:
+                _enemyOrbitAngle += circleSpeed * dt;
+                _enemyCubePosition = new Vector3(
+                    MathF.Cos(_enemyOrbitAngle) * circleRadius,
+                    0f,
+                    MathF.Sin(_enemyOrbitAngle) * circleRadius);
+                break;
+            case EntityMovementKind.Wandering:
+                _enemyWanderPhase += dt;
+                float angle = _enemyWanderPhase + (float)s_enemyWanderRandom.NextDouble() * 0.5f;
+                float r = (float)s_enemyWanderRandom.NextDouble() * wanderSpeed * dt;
+                _enemyCubePosition += new Vector3(MathF.Cos(angle) * r, 0f, MathF.Sin(angle) * r);
+                float dist = MathF.Sqrt(_enemyCubePosition.X * _enemyCubePosition.X + _enemyCubePosition.Z * _enemyCubePosition.Z);
+                if (dist > wanderRadius)
+                {
+                    var dir = Vector3.Normalize(new Vector3(_enemyCubePosition.X, 0, _enemyCubePosition.Z));
+                    _enemyCubePosition = dir * wanderRadius;
+                }
+                break;
+            case EntityMovementKind.Chasing:
+                {
+                    var toPlayer = _player.Position - _enemyCubePosition;
+                    toPlayer.Y = 0;
+                    if (toPlayer.LengthSquared() > 0.01f)
+                    {
+                        toPlayer.Normalize();
+                        _enemyCubePosition += toPlayer * chaseSpeed * dt;
+                    }
+                }
+                break;
+            case EntityMovementKind.Hovering:
+                float y = MathF.Sin((float)(Transport?.CurrentTime ?? 0) * hoverFreq) * hoverAmplitude;
+                _enemyCubePosition = new Vector3(0f, y, 0f);
+                break;
+        }
+    }
+
     public override void Update(GameTime gameTime)
     {
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
@@ -534,6 +613,9 @@ public class GameViewPanel : PanelBase
 
         var (forwardXZ, rightXZ) = _camera.GetCameraForwardRightXZ();
         _player.Update(Input, viewportRect, dt, forwardXZ, rightXZ);
+
+        _rainAnimationTime += gameTime.ElapsedGameTime.TotalSeconds;
+        UpdateEnemyMovement(dt);
 
         float currentTime = (float)(Transport?.CurrentTime ?? 0);
         for (int i = _spawnedEntities.Count - 1; i >= 0; i--)
