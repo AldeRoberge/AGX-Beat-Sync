@@ -18,6 +18,7 @@ class Program
 
     static async Task<int> Main(string[] args)
     {
+        string? failureMessage = null;
         try
         {
             AnsiConsole.Write(new FigletText("AGX Beat Sync Deploy").Color(Color.Aqua));
@@ -46,22 +47,19 @@ class Program
             }
 
             // Step 3: Zip the published output
+            failureMessage = "Zip creation failed. Check free disk space and permissions for the publish and temporary directories.";
             var versionFolder = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
             var zipPath = await ZipPublishDirectory(publishPath, versionFolder, runtime);
-            if (zipPath == null)
-            {
-                AnsiConsole.MarkupLine("[red]Failed to create zip archive[/]");
-                return 1;
-            }
 
             // Step 4: Ensure GCS bucket exists
+            failureMessage = $"GCS bucket validation failed for gs://{GcsBucketName}. Check the bucket name, network access, and Google Cloud permissions.";
             if (!await EnsureBucketExists())
             {
-                AnsiConsole.MarkupLine("[red]Failed to create or verify GCS bucket[/]");
-                return 1;
+                return ReportFailure(failureMessage);
             }
 
             // Step 5: Upload to GCS (use UTC for version folder name so builds are comparable across timezones)
+            failureMessage = $"GCS upload failed for gs://{GcsBucketName}. Check network access and permission to upload objects.";
             var uploadSuccess = await UploadToGcs(zipPath, versionFolder, runtime);
 
             if (uploadSuccess)
@@ -73,15 +71,25 @@ class Program
             }
             else
             {
-                AnsiConsole.MarkupLine("[red]Failed to upload to GCS[/]");
-                return 1;
+                return ReportFailure(failureMessage);
             }
         }
         catch (Exception ex)
         {
+            if (failureMessage != null)
+            {
+                return ReportFailure(failureMessage);
+            }
+
             AnsiConsole.WriteException(ex);
             return 1;
         }
+    }
+
+    static int ReportFailure(string message)
+    {
+        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
+        return 1;
     }
 
     static async Task<bool> BuildProject(string configuration, string runtime)
@@ -168,7 +176,7 @@ class Program
             });
     }
 
-    static async Task<string?> ZipPublishDirectory(string publishDir, string versionFolder, string runtime)
+    static async Task<string> ZipPublishDirectory(string publishDir, string versionFolder, string runtime)
     {
         return await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
@@ -176,24 +184,16 @@ class Program
             {
                 await Task.Yield();
                 var zipPath = Path.Combine(Path.GetTempPath(), $"agx-beat-sync-{runtime}-{versionFolder}.zip");
-                try
-                {
-                    System.IO.Compression.ZipFile.CreateFromDirectory(publishDir, zipPath, System.IO.Compression.CompressionLevel.Optimal, false);
+                System.IO.Compression.ZipFile.CreateFromDirectory(publishDir, zipPath, System.IO.Compression.CompressionLevel.Optimal, false);
 
-                    var info = new FileInfo(zipPath);
-                    var sizeMb = info.Length / (1024.0 * 1024.0);
-                    AnsiConsole.MarkupLine($"[green]✓ Zipped to {Path.GetFileName(zipPath)} ({sizeMb:F1} MB)[/]");
+                var info = new FileInfo(zipPath);
+                var sizeMb = info.Length / (1024.0 * 1024.0);
+                AnsiConsole.MarkupLine($"[green]✓ Zipped to {Path.GetFileName(zipPath)} ({sizeMb:F1} MB)[/]");
 
-                    // Clean up unzipped publish directory now that we have the archive
-                    try { Directory.Delete(publishDir, true); } catch { /* best-effort */ }
+                // Clean up unzipped publish directory now that we have the archive
+                try { Directory.Delete(publishDir, true); } catch { /* best-effort */ }
 
-                    return zipPath;
-                }
-                catch (Exception ex)
-                {
-                    AnsiConsole.MarkupLine($"[red]Failed to create zip: {ex.Message}[/]");
-                    return null;
-                }
+                return zipPath;
             });
     }
 
@@ -217,10 +217,12 @@ class Program
                 var checkProcess = Process.Start(checkInfo);
                 if (checkProcess == null)
                 {
-                    AnsiConsole.MarkupLine("[red]Failed to start gsutil. Ensure Google Cloud SDK is installed and on PATH.[/]");
                     return false;
                 }
-                await checkProcess.WaitForExitAsync();
+                await Task.WhenAll(
+                    checkProcess.StandardOutput.BaseStream.CopyToAsync(Stream.Null),
+                    checkProcess.StandardError.BaseStream.CopyToAsync(Stream.Null),
+                    checkProcess.WaitForExitAsync());
 
                 if (checkProcess.ExitCode == 0)
                 {
@@ -228,8 +230,8 @@ class Program
                     return true;
                 }
 
-                // Bucket doesn't exist — create it
-                AnsiConsole.MarkupLine($"[yellow]Bucket '{GcsBucketName}' not found. Creating...[/]");
+                // Try creating the bucket if the existence check fails
+                AnsiConsole.MarkupLine($"[yellow]Bucket '{GcsBucketName}' could not be verified. Attempting to create it...[/]");
 
                 var createInfo = new ProcessStartInfo
                 {
@@ -244,20 +246,16 @@ class Program
                 var createProcess = Process.Start(createInfo);
                 if (createProcess == null)
                 {
-                    AnsiConsole.MarkupLine("[red]Failed to start gsutil mb.[/]");
                     return false;
                 }
 
-                var output = await createProcess.StandardOutput.ReadToEndAsync();
-                var error = await createProcess.StandardError.ReadToEndAsync();
-                await createProcess.WaitForExitAsync();
+                await Task.WhenAll(
+                    createProcess.StandardOutput.BaseStream.CopyToAsync(Stream.Null),
+                    createProcess.StandardError.BaseStream.CopyToAsync(Stream.Null),
+                    createProcess.WaitForExitAsync());
 
                 if (createProcess.ExitCode != 0)
                 {
-                    AnsiConsole.MarkupLine($"[red]Failed to create bucket '{GcsBucketName}':[/]");
-                    AnsiConsole.WriteLine(output);
-                    AnsiConsole.WriteLine(error);
-                    AnsiConsole.MarkupLine("[yellow]Run [bold]gcloud auth login[/] if you need to authenticate.[/]");
                     return false;
                 }
 
@@ -282,7 +280,6 @@ class Program
         var process = Process.Start(startInfo);
         if (process == null)
         {
-            AnsiConsole.MarkupLine("[red]Failed to start gsutil. Ensure Google Cloud SDK is installed and on PATH.[/]");
             return false;
         }
 
@@ -296,8 +293,6 @@ class Program
 
         if (process.ExitCode != 0)
         {
-            AnsiConsole.MarkupLine("[red]gsutil upload failed.[/]");
-            AnsiConsole.MarkupLine("[yellow]Run [bold]gcloud auth login[/] if you need to authenticate.[/]");
             return false;
         }
 
